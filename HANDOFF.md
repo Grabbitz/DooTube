@@ -11,7 +11,7 @@ Updated 2026-10-24. Earlier checkpoint (2026-10-23) is in Git history.
 ## Where things are
 
 - Released: 0.2.2 (see [CHANGELOG.md](CHANGELOG.md)). Video full screen on F, Home button, toolbar on the page's background, web-process crash reload.
-- Unreleased on `main` / `claude/check-latest-work-67m5zl`:
+- Unreleased (Now Playing and Controls are on `main`; the rest is on branch `claude/check-latest-work-67m5zl`, not merged yet):
   - Now Playing card for YouTube Music in the sidebar and a Controls menu (⌘P, ⌘→, ⌘←).
   - Up Next thumbnails and drag-to-reorder (drag out gives the video link).
   - Saved videos resume where they were left (`t=` on open; position reported by the page script).
