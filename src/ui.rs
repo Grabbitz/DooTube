@@ -38,14 +38,24 @@ pub fn circular_image(image: &NSImage, size: f64) -> Retained<NSImage> {
 
 /// Fills a `size`-point square with `image`, cropped to its center, with rounded corners.
 pub fn rounded_image(image: &NSImage, size: f64, radius: f64) -> Retained<NSImage> {
+    rounded_image_sized(image, NSSize::new(size, size), radius)
+}
+
+/// Fills `size` with `image`, cropped to its center at that aspect ratio, with rounded corners.
+pub fn rounded_image_sized(image: &NSImage, size: NSSize, radius: f64) -> Retained<NSImage> {
     let image = image.retain();
     let draw = block2::RcBlock::new(move |rect: NSRect| -> Bool {
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, radius, radius).addClip();
         let source = image.size();
-        let side = source.width.min(source.height);
+        let aspect = rect.size.width / rect.size.height;
+        let (width, height) = if source.width / source.height > aspect {
+            (source.height * aspect, source.height)
+        } else {
+            (source.width, source.width / aspect)
+        };
         let crop = NSRect::new(
-            NSPoint::new((source.width - side) / 2., (source.height - side) / 2.),
-            NSSize::new(side, side),
+            NSPoint::new((source.width - width) / 2., (source.height - height) / 2.),
+            NSSize::new(width, height),
         );
         image.drawInRect_fromRect_operation_fraction(
             rect,
@@ -55,7 +65,7 @@ pub fn rounded_image(image: &NSImage, size: f64, radius: f64) -> Retained<NSImag
         );
         Bool::YES
     });
-    NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(size, size), false, &draw)
+    NSImage::imageWithSize_flipped_drawingHandler(size, false, &draw)
 }
 
 pub fn activate(constraints: &[Retained<NSLayoutConstraint>]) {
@@ -149,6 +159,69 @@ pub fn sidebar_cell(
             .constraintEqualToAnchor(&cell.centerYAnchor()),
         icon.widthAnchor().constraintEqualToConstant(18.),
         icon.heightAnchor().constraintEqualToConstant(18.),
+        text.leadingAnchor()
+            .constraintEqualToAnchor_constant(&icon.trailingAnchor(), 8.),
+        text.trailingAnchor()
+            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.),
+        text.centerYAnchor()
+            .constraintEqualToAnchor(&cell.centerYAnchor()),
+    ]);
+    cell.into_super()
+}
+
+/// Height of an Up Next row, which shows the video's thumbnail.
+pub const SAVED_ROW_HEIGHT: f64 = 36.;
+const THUMBNAIL_SIZE: NSSize = NSSize::new(48., 27.);
+
+/// A downloaded video thumbnail, prepared once for [`saved_cell`].
+pub fn thumbnail_image(image: &NSImage) -> Retained<NSImage> {
+    rounded_image_sized(image, THUMBNAIL_SIZE, 4.)
+}
+
+/// Up Next row: the video's [`thumbnail_image`] (or `symbol_name` until it loads) and its title.
+/// The thumbnail box keeps its size either way, so titles don't shift when it arrives.
+pub fn saved_cell(
+    mtm: MainThreadMarker,
+    title: &str,
+    thumbnail: Option<&NSImage>,
+    symbol_name: &str,
+) -> Retained<NSView> {
+    let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(220., SAVED_ROW_HEIGHT));
+    let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), frame);
+    let icon = NSImageView::new(mtm);
+    icon.setTranslatesAutoresizingMaskIntoConstraints(false);
+    match thumbnail {
+        Some(image) => {
+            icon.setImage(Some(image));
+            icon.setImageScaling(NSImageScaling::ScaleNone);
+        }
+        None => {
+            icon.setImage(symbol(symbol_name, title).as_deref());
+            icon.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+            let config =
+                NSImageSymbolConfiguration::configurationWithPointSize_weight(16., unsafe {
+                    NSFontWeightRegular
+                });
+            icon.setSymbolConfiguration(Some(&config));
+        }
+    }
+    let text = label(mtm, title);
+    cell.setToolTip(Some(&ns(title)));
+    cell.addSubview(&icon);
+    cell.addSubview(&text);
+    unsafe {
+        // Not the cell's imageView: the source list would tint the thumbnail on selection.
+        cell.setTextField(Some(&text));
+    }
+    activate(&[
+        icon.leadingAnchor()
+            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 4.),
+        icon.centerYAnchor()
+            .constraintEqualToAnchor(&cell.centerYAnchor()),
+        icon.widthAnchor()
+            .constraintEqualToConstant(THUMBNAIL_SIZE.width),
+        icon.heightAnchor()
+            .constraintEqualToConstant(THUMBNAIL_SIZE.height),
         text.leadingAnchor()
             .constraintEqualToAnchor_constant(&icon.trailingAnchor(), 8.),
         text.trailingAnchor()

@@ -197,6 +197,17 @@ impl QueueItem {
             .or_else(|| self.video_id())
             .unwrap_or_else(|| "YouTube video".to_owned())
     }
+    /// YouTube's medium (320×180) thumbnail for the saved video, when its ID looks like one.
+    pub fn thumbnail_url(&self) -> Option<String> {
+        self.video_id()
+            .filter(|id| {
+                id.len() <= 32
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+            .map(|id| format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"))
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -229,6 +240,16 @@ impl AppState {
         }
         self.up_next.remove(index);
         true
+    }
+    /// Where item `from` lands when dropped in the gap before item `gap` (`len` is after the
+    /// last). `None` when either is out of range or the item would stay where it is.
+    pub fn drop_destination(&self, from: usize, gap: usize) -> Option<usize> {
+        if from >= self.up_next.len() || gap > self.up_next.len() {
+            return None;
+        }
+        // Removing the item first shifts every later gap up by one.
+        let to = if gap > from { gap - 1 } else { gap };
+        (to != from).then_some(to)
     }
     pub fn move_item(&mut self, from: usize, to: usize) -> bool {
         if from >= self.up_next.len() || to >= self.up_next.len() {
@@ -443,6 +464,57 @@ mod tests {
         assert!(state.remove(1));
         assert!(!state.remove(4));
     }
+    #[test]
+    fn dropping_between_saved_rows_moves_to_that_gap() {
+        let mut state = AppState::default();
+        for id in ["a", "b", "c"] {
+            state.add(
+                &Url::parse(&format!("https://youtu.be/{id}")).unwrap(),
+                None,
+            );
+        }
+        // Gaps before and after the item itself leave it in place.
+        assert_eq!(state.drop_destination(1, 1), None);
+        assert_eq!(state.drop_destination(1, 2), None);
+        assert_eq!(state.drop_destination(0, 3), Some(2));
+        assert_eq!(state.drop_destination(2, 0), Some(0));
+        assert_eq!(state.drop_destination(0, 2), Some(1));
+        assert_eq!(state.drop_destination(3, 0), None);
+        assert_eq!(state.drop_destination(0, 4), None);
+        let to = state.drop_destination(0, 3).unwrap();
+        assert!(state.move_item(0, to));
+        let ids: Vec<_> = state
+            .up_next
+            .iter()
+            .filter_map(QueueItem::video_id)
+            .collect();
+        assert_eq!(ids, ["b", "c", "a"]);
+    }
+
+    #[test]
+    fn saved_videos_have_a_thumbnail_only_for_plain_video_ids() {
+        let thumbnail = |url: &str| {
+            QueueItem {
+                url: url.to_owned(),
+                title: None,
+            }
+            .thumbnail_url()
+        };
+        assert_eq!(
+            thumbnail("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=5").as_deref(),
+            Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg")
+        );
+        assert_eq!(
+            thumbnail("https://music.youtube.com/watch?v=abc_-123").as_deref(),
+            Some("https://i.ytimg.com/vi/abc_-123/mqdefault.jpg")
+        );
+        assert_eq!(
+            thumbnail("https://www.youtube.com/watch?v=a%2F..%2Fb"),
+            None
+        );
+        assert_eq!(thumbnail("https://www.youtube.com/feed/history"), None);
+    }
+
     #[test]
     fn same_video_in_another_link_form_is_not_saved_twice() {
         let mut state = AppState::default();

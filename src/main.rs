@@ -20,13 +20,14 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationPresentationOptions, NSAutoresizingMaskOptions, NSBackingStoreType, NSBox,
     NSBoxType, NSColor, NSControl, NSControlStateValueOff, NSControlStateValueOn,
-    NSControlTextEditingDelegate, NSEventModifierFlags, NSEventType, NSImage, NSImageScaling,
-    NSImageView, NSMenu, NSMenuItem, NSMenuToolbarItem, NSResponder, NSScrollView,
+    NSControlTextEditingDelegate, NSDragOperation, NSDraggingInfo, NSEventModifierFlags,
+    NSEventType, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem, NSMenuToolbarItem,
+    NSPasteboardItem, NSPasteboardTypeURL, NSPasteboardWriting, NSResponder, NSScrollView,
     NSSearchToolbarItem, NSSegmentSwitchTracking, NSSegmentedControl, NSSplitViewController,
     NSSplitViewItem, NSStackView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
     NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewStyle, NSText, NSTitlePosition, NSToolbar, NSToolbarDelegate,
-    NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSTableViewDropOperation, NSTableViewStyle, NSText, NSTitlePosition, NSToolbar,
+    NSToolbarDelegate, NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
     NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSViewFrameDidChangeNotification,
     NSWindow, NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode,
@@ -34,8 +35,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSError, NSHTTPCookie, NSIndexSet, NSInteger,
-    NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSet, NSSize, NSString, NSURL, NSURLRequest, NSValue, ns_string,
+    NSMutableIndexSet, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol,
+    NSPoint, NSRect, NSSet, NSSize, NSString, NSURL, NSURLRequest, NSValue, ns_string,
 };
 use objc2_quartz_core::{
     CABasicAnimation, CAMediaTiming, CAMediaTimingFunction, CATransaction, CATransform3D,
@@ -51,6 +52,7 @@ use objc2_web_kit::{
 };
 use std::{
     cell::{Cell, OnceCell, RefCell},
+    collections::HashMap,
     ffi::c_void,
     ptr::NonNull,
     time::{Duration, Instant},
@@ -68,6 +70,8 @@ const SAVE_ID: &str = "dootube.save";
 const PIP_ID: &str = "dootube.pip";
 const ACCOUNT_ID: &str = "dootube.account";
 const SIGN_OUT_URL: &str = "https://www.youtube.com/logout";
+/// Pasteboard type carrying the Up Next index of a row being dragged within the sidebar.
+const UP_NEXT_DRAG_TYPE: &str = "com.dootube.up-next-index";
 /// Tag for sidebar context-menu items, which act on the clicked row rather than the selection.
 const CONTEXT_TAG: NSInteger = 1;
 const OBSERVED_WEB_KEYS: [&str; 5] = [
@@ -177,6 +181,9 @@ struct AppIvars {
     /// Downloaded artwork for `track`, with the URL it came from.
     artwork: RefCell<Option<(String, Retained<NSImage>)>>,
     now_playing: OnceCell<ui::NowPlayingCard>,
+    /// Up Next thumbnails by URL, kept for the session; `None` while loading or after a failed
+    /// download, so each is fetched at most once.
+    thumbnails: RefCell<HashMap<String, Option<Retained<NSImage>>>>,
     account_lookup_pending: Cell<bool>,
     account_lookup_attempted: Cell<bool>,
     syncing_selection: Cell<bool>,
@@ -614,6 +621,45 @@ define_class!(
         fn number_of_rows(&self, _table: &NSTableView) -> NSInteger {
             self.rows().len() as NSInteger
         }
+        #[unsafe(method_id(tableView:pasteboardWriterForRow:))]
+        fn pasteboard_writer(
+            &self,
+            _table: &NSTableView,
+            row: NSInteger,
+        ) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+            self.saved_row_pasteboard_item(row)
+                .map(ProtocolObject::from_retained)
+        }
+        #[unsafe(method(tableView:validateDrop:proposedRow:proposedDropOperation:))]
+        fn validate_drop(
+            &self,
+            table: &NSTableView,
+            info: &ProtocolObject<dyn NSDraggingInfo>,
+            row: NSInteger,
+            _operation: NSTableViewDropOperation,
+        ) -> NSDragOperation {
+            match self.drop_target(table, info, row) {
+                Some(_) => {
+                    // Always a gap between rows, never onto a row.
+                    table.setDropRow_dropOperation(row, NSTableViewDropOperation::Above);
+                    NSDragOperation::Move
+                }
+                None => NSDragOperation::None,
+            }
+        }
+        #[unsafe(method(tableView:acceptDrop:row:dropOperation:))]
+        fn accept_drop(
+            &self,
+            table: &NSTableView,
+            info: &ProtocolObject<dyn NSDraggingInfo>,
+            row: NSInteger,
+            _operation: NSTableViewDropOperation,
+        ) -> bool {
+            match self.drop_target(table, info, row) {
+                Some((from, to)) => self.change_queue(|state| state.move_item(from, to)),
+                None => false,
+            }
+        }
     }
 
     unsafe impl NSControlTextEditingDelegate for AppDelegate {}
@@ -631,6 +677,13 @@ define_class!(
         #[unsafe(method(tableView:isGroupRow:))]
         fn is_group_row(&self, _table: &NSTableView, row: NSInteger) -> bool {
             self.row_at(row) == Some(Row::UpNextHeader)
+        }
+        #[unsafe(method(tableView:heightOfRow:))]
+        fn height_of_row(&self, table: &NSTableView, row: NSInteger) -> f64 {
+            match self.row_at(row) {
+                Some(Row::Saved(_)) => ui::SAVED_ROW_HEIGHT,
+                _ => table.rowHeight(),
+            }
         }
         #[unsafe(method(tableView:shouldSelectRow:))]
         fn should_select_row(&self, _table: &NSTableView, row: NSInteger) -> bool {
@@ -849,6 +902,7 @@ impl AppDelegate {
             track: RefCell::new(web::Track::default()),
             artwork: RefCell::new(None),
             now_playing: OnceCell::new(),
+            thumbnails: RefCell::new(HashMap::new()),
             account_lookup_pending: Cell::new(false),
             account_lookup_attempted: Cell::new(false),
             syncing_selection: Cell::new(false),
@@ -1148,6 +1202,10 @@ impl AppDelegate {
             }
         }
         unsafe { table.setMenu(Some(&menu)) };
+        // Up Next rows reorder by dragging within the sidebar and drag out as video links.
+        table.registerForDraggedTypes(&NSArray::from_retained_slice(&[ns(UP_NEXT_DRAG_TYPE)]));
+        table.setDraggingSourceOperationMask_forLocal(NSDragOperation::Move, true);
+        table.setDraggingSourceOperationMask_forLocal(NSDragOperation::Copy, false);
         let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), frame);
         scroll.setDocumentView(Some(&table));
         scroll.setHasVerticalScroller(true);
@@ -1693,10 +1751,10 @@ impl AppDelegate {
             }
             Row::UpNextHeader => ui::header_cell(mtm, "Up Next"),
             Row::Saved(index) => {
-                let (label, music) = self.with_state(|state| {
+                let (label, music, thumbnail) = self.with_state(|state| {
                     state.up_next.get(index).map(|item| {
                         let music = Url::parse(&item.url).is_ok_and(|url| is_music_url(&url));
-                        (item.label(), music)
+                        (item.label(), music, item.thumbnail_url())
                     })
                 })??;
                 let symbol = if music {
@@ -1704,7 +1762,8 @@ impl AppDelegate {
                 } else {
                     "play.rectangle"
                 };
-                ui::sidebar_cell(mtm, &label, symbol, Some(&label))
+                let image = thumbnail.and_then(|url| self.thumbnail(url));
+                ui::saved_cell(mtm, &label, image.as_deref(), symbol)
             }
             Row::EmptyHint => ui::hint_cell(
                 mtm,
@@ -1715,6 +1774,94 @@ impl AppDelegate {
                 },
             ),
         })
+    }
+
+    /// What dragging Up Next `row` carries: its index for reordering here, and its video link
+    /// for drops outside the sidebar.
+    fn saved_row_pasteboard_item(&self, row: NSInteger) -> Option<Retained<NSPasteboardItem>> {
+        let Some(Row::Saved(index)) = self.row_at(row) else {
+            return None;
+        };
+        let url =
+            self.with_state(|state| state.up_next.get(index).map(|item| item.url.clone()))??;
+        let item = NSPasteboardItem::new();
+        item.setString_forType(&ns(&index.to_string()), &ns(UP_NEXT_DRAG_TYPE));
+        item.setString_forType(&ns(&url), unsafe { NSPasteboardTypeURL });
+        Some(item)
+    }
+
+    /// The downloaded thumbnail at `url`, starting its download the first time it is asked for.
+    fn thumbnail(&self, url: String) -> Option<Retained<NSImage>> {
+        let mut thumbnails = self.ivars().thumbnails.borrow_mut();
+        if let Some(image) = thumbnails.get(&url) {
+            return image.clone();
+        }
+        thumbnails.insert(url.clone(), None);
+        load_image(url, AppDelegate::on_thumbnail);
+        None
+    }
+
+    /// Keeps a downloaded thumbnail and redraws the Up Next rows that show it.
+    fn on_thumbnail(&self, url: &str, bytes: Vec<u8>) {
+        let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes))
+        else {
+            return;
+        };
+        self.ivars()
+            .thumbnails
+            .borrow_mut()
+            .insert(url.to_owned(), Some(ui::thumbnail_image(&image)));
+        let Some(table) = self.ivars().sidebar.get() else {
+            return;
+        };
+        let rows = NSMutableIndexSet::new();
+        let saved = self
+            .with_state(|state| {
+                state
+                    .up_next
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item.thumbnail_url().as_deref() == Some(url))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for index in saved {
+            let row = self.row_index(Row::Saved(index));
+            if row >= 0 {
+                rows.addIndex(row as usize);
+            }
+        }
+        if rows.count() > 0 {
+            self.ivars().syncing_selection.set(true);
+            table.reloadDataForRowIndexes_columnIndexes(&rows, &NSIndexSet::indexSetWithIndex(0));
+            self.ivars().syncing_selection.set(false);
+        }
+    }
+
+    /// For a drag of one of this sidebar's Up Next rows to the gap above `row`: the saved item's
+    /// index and where it moves to. `None` for other drags, gaps outside Up Next, and drops that
+    /// would leave the item where it is.
+    fn drop_target(
+        &self,
+        table: &NSTableView,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
+        row: NSInteger,
+    ) -> Option<(usize, usize)> {
+        let source = info.draggingSource()?;
+        if !std::ptr::eq(&*source, AsRef::<AnyObject>::as_ref(table)) {
+            return None;
+        }
+        let from: usize = info
+            .draggingPasteboard()
+            .stringForType(&ns(UP_NEXT_DRAG_TYPE))?
+            .to_string()
+            .parse()
+            .ok()?;
+        let first = usize::try_from(self.row_index(Row::Saved(0))).ok()?;
+        let gap = usize::try_from(row).ok()?.checked_sub(first)?;
+        let to = self.with_state(|state| state.drop_destination(from, gap))??;
+        Some((from, to))
     }
 
     fn row_index(&self, target: Row) -> NSInteger {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Up Next rows show each video's thumbnail. Drag a row to reorder Up Next, or drag it out of the sidebar to use its video link elsewhere; Move Up and Move Down are still in the row's menu.
 - The Now Playing card is separated from the sidebar list by a hairline, with a clearer play control and larger click targets. Switching play and pause no longer redraws the cover. The first-load state names what is loading.
 - Added Now Playing for YouTube Music: while the YouTube section is shown, the sidebar shows the playing track's artwork, title, and artist with Previous, Play/Pause, and Next; click the artwork to go to Music.
 - Added a Controls menu (Play/Pause ⌘P, Next ⌘→, Previous ⌘←) that controls YouTube Music from either section. Next and Previous step aside while you're typing, so ⌘←/⌘→ still move the cursor.
