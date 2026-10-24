@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 — 2026-10-24
 
 - Added a Home button next to Back/Forward and View → Home (⇧⌘H). The three now sit together at the leading edge of the toolbar, like Finder and Safari.
 - The toolbar no longer repeats the page title, which crowded the controls on video pages. The window title (Window menu, Mission Control) and saved Up Next titles drop YouTube's unread-notification count, such as `(1) `.
