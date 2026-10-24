@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added Now Playing for YouTube Music: while the YouTube section is shown, the sidebar shows the playing track's artwork, title, and artist with Previous, Play/Pause, and Next; click the artwork to go to Music.
+- Added a Controls menu (Play/Pause ⌘P, Next ⌘→, Previous ⌘←) that controls YouTube Music from either section. Next and Previous step aside while you're typing, so ⌘←/⌘→ still move the cursor.
+- YouTube Music now offers next and previous to the system's media controls by pressing its own player-bar buttons (not yet tested with the keyboard's media keys or Control Center).
+
 ## 0.2.2 — 2026-10-24
 
 - Added a Home button next to Back/Forward and View → Home (⇧⌘H). The three now sit together at the leading edge of the toolbar, like Finder and Safari.

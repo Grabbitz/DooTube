@@ -20,6 +20,7 @@ xattr -dr com.apple.quarantine /Applications/DooTube.app
 - **Native toolbar and sidebar** replace the sites' own headers. The player is untouched.
 - **Google sign-in** in the app. The toolbar shows your account photo.
 - **Up Next**: save videos with ⌘S, then reorder or remove them in the sidebar.
+- **Now Playing**: while you browse YouTube, the sidebar shows what YouTube Music is playing, with play/pause, next, and previous. The Controls menu works from either section.
 - **Video full screen**: press F and the video zooms out to fill the screen. Press F or Esc to zoom back.
 - **Picture in Picture** (⌃⌘P). Keeps playing while the app is hidden.
 
@@ -29,6 +30,8 @@ xattr -dr com.apple.quarantine /Applications/DooTube.app
 | ⌘[ / ⌘] | Back / Forward |
 | ⇧⌘H | Home |
 | ⌘R | Reload |
+| ⌘P | Music: Play / Pause |
+| ⌘← / ⌘→ | Music: Previous / Next |
 | ⌃⌘S | Toggle sidebar |
 | ⌃⌘F | Window full screen |
 

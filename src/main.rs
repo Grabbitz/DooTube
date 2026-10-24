@@ -23,14 +23,14 @@ use objc2_app_kit::{
     NSControlTextEditingDelegate, NSEventModifierFlags, NSEventType, NSImage, NSImageScaling,
     NSImageView, NSMenu, NSMenuItem, NSMenuToolbarItem, NSResponder, NSScrollView,
     NSSearchToolbarItem, NSSegmentSwitchTracking, NSSegmentedControl, NSSplitViewController,
-    NSSplitViewItem, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
+    NSSplitViewItem, NSStackView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
     NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewStyle, NSTitlePosition, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
-    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier, NSView,
-    NSViewController, NSViewFrameDidChangeNotification, NSWindow, NSWindowCollectionBehavior,
-    NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
-    NSWindowToolbarStyle, NSWorkspace,
+    NSTableViewStyle, NSText, NSTitlePosition, NSToolbar, NSToolbarDelegate,
+    NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
+    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSViewFrameDidChangeNotification,
+    NSWindow, NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode,
+    NSWindowStyleMask, NSWindowTitleVisibility, NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSError, NSHTTPCookie, NSIndexSet, NSInteger,
@@ -77,35 +77,32 @@ const OBSERVED_WEB_KEYS: [&str; 5] = [
     "canGoForward",
     "underPageBackgroundColor",
 ];
-fn is_youtube_main_frame(message: &WKScriptMessage) -> bool {
+/// The HTTPS page URL of the main frame that posted `message`; `None` for subframes.
+fn main_frame_url(message: &WKScriptMessage) -> Option<Url> {
     let frame = unsafe { message.frameInfo() };
     if !unsafe { frame.isMainFrame() } {
-        return false;
+        return None;
     }
     let request = unsafe { frame.request() };
     request
         .URL()
         .and_then(|url| url.absoluteString())
         .and_then(|text| Url::parse(&text.to_string()).ok())
-        .is_some_and(|url| url.scheme() == "https" && url.host_str() == Some("www.youtube.com"))
+        .filter(|url| url.scheme() == "https")
+}
+fn is_youtube_main_frame(message: &WKScriptMessage) -> bool {
+    main_frame_url(message).is_some_and(|url| url.host_str() == Some("www.youtube.com"))
+}
+fn is_music_main_frame(message: &WKScriptMessage) -> bool {
+    main_frame_url(message).is_some_and(|url| url.host_str() == Some("music.youtube.com"))
 }
 fn is_video_fullscreen_main_frame(message: &WKScriptMessage) -> bool {
-    let frame = unsafe { message.frameInfo() };
-    if !unsafe { frame.isMainFrame() } {
-        return false;
-    }
-    let request = unsafe { frame.request() };
-    request
-        .URL()
-        .and_then(|url| url.absoluteString())
-        .and_then(|text| Url::parse(&text.to_string()).ok())
-        .is_some_and(|url| {
-            url.scheme() == "https"
-                && matches!(
-                    url.host_str(),
-                    Some("youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com")
-                )
-        })
+    main_frame_url(message).is_some_and(|url| {
+        matches!(
+            url.host_str(),
+            Some("youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com")
+        )
+    })
 }
 
 fn exit_fullscreen_js(id: u64) -> String {
@@ -175,6 +172,11 @@ struct AppIvars {
     account_identity: RefCell<Option<web::AccountIdentity>>,
     /// The active account's photo, once downloaded.
     account_photo: RefCell<Option<Retained<NSImage>>>,
+    /// YouTube Music's player-bar track; an empty title means nothing is loaded.
+    track: RefCell<web::Track>,
+    /// Downloaded artwork for `track`, with the URL it came from.
+    artwork: RefCell<Option<(String, Retained<NSImage>)>>,
+    now_playing: OnceCell<ui::NowPlayingCard>,
     account_lookup_pending: Cell<bool>,
     account_lookup_attempted: Cell<bool>,
     syncing_selection: Cell<bool>,
@@ -492,11 +494,17 @@ define_class!(
                     *self.ivars().account_photo.borrow_mut() = None;
                     self.update_account_ui();
                     if let Some(url) = photo {
-                        load_account_photo(url);
+                        load_image(url, AppDelegate::on_account_photo);
                     }
+                }
+                Some(PageMessage::NowPlaying(track))
+                    if self.mode_of(&web) == Some(Mode::Music) && is_music_main_frame(message) =>
+                {
+                    self.on_now_playing(track);
                 }
                 Some(PageMessage::AccountIdentity { .. })
                 | Some(PageMessage::Fullscreen { .. })
+                | Some(PageMessage::NowPlaying(_))
                 | None => {}
             }
         }
@@ -705,6 +713,18 @@ define_class!(
         fn action_show_music(&self, _sender: Option<&AnyObject>) {
             self.switch_mode(Mode::Music);
         }
+        #[unsafe(method(musicPlayPause:))]
+        fn action_music_play_pause(&self, _sender: Option<&AnyObject>) {
+            self.music_control("playpause");
+        }
+        #[unsafe(method(musicNext:))]
+        fn action_music_next(&self, _sender: Option<&AnyObject>) {
+            self.music_control("next");
+        }
+        #[unsafe(method(musicPrevious:))]
+        fn action_music_previous(&self, _sender: Option<&AnyObject>) {
+            self.music_control("previous");
+        }
         #[unsafe(method(sidebarClicked:))]
         fn action_sidebar_clicked(&self, sender: &NSTableView) {
             self.open_row(sender.clickedRow());
@@ -826,6 +846,9 @@ impl AppDelegate {
             signed_in: Cell::new(None),
             account_identity: RefCell::new(None),
             account_photo: RefCell::new(None),
+            track: RefCell::new(web::Track::default()),
+            artwork: RefCell::new(None),
+            now_playing: OnceCell::new(),
             account_lookup_pending: Cell::new(false),
             account_lookup_attempted: Cell::new(false),
             syncing_selection: Cell::new(false),
@@ -1059,7 +1082,8 @@ impl AppDelegate {
         })
     }
 
-    fn build_sidebar(&self) -> Retained<NSScrollView> {
+    /// The source list, with the Now Playing card pinned below it.
+    fn build_sidebar(&self) -> Retained<NSView> {
         let mtm = self.mtm();
         let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(220., 700.));
         let table = NSTableView::initWithFrame(NSTableView::alloc(mtm), frame);
@@ -1141,7 +1165,33 @@ impl AppDelegate {
             );
         }
         self.ivars().sidebar.set(table).ok();
-        scroll
+        let card = ui::NowPlayingCard::new(mtm);
+        for (button, action) in [
+            (&card.artwork, sel!(showMusic:)),
+            (&card.previous, sel!(musicPrevious:)),
+            (&card.play_pause, sel!(musicPlayPause:)),
+            (&card.next, sel!(musicNext:)),
+        ] {
+            unsafe {
+                button.setTarget(Some(self));
+                button.setAction(Some(action));
+            }
+        }
+        let column = NSStackView::new(mtm);
+        column.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        column.setSpacing(0.);
+        column.addArrangedSubview(&scroll);
+        column.addArrangedSubview(&card.root);
+        ui::activate(&[
+            scroll
+                .widthAnchor()
+                .constraintEqualToAnchor(&column.widthAnchor()),
+            card.root
+                .widthAnchor()
+                .constraintEqualToAnchor(&column.widthAnchor()),
+        ]);
+        self.ivars().now_playing.set(card).ok();
+        column.into_super()
     }
 
     fn build_toolbar_items(&self) {
@@ -1339,6 +1389,17 @@ impl AppDelegate {
                 )),
             ],
         );
+        ui::add_menu(
+            mtm,
+            &main,
+            "Controls",
+            vec![
+                Some(mine("Play", sel!(musicPlayPause:), "p")),
+                None,
+                Some(mine("Next", sel!(musicNext:), "\u{F703}")),
+                Some(mine("Previous", sel!(musicPrevious:), "\u{F702}")),
+            ],
+        );
         let option_command = NSEventModifierFlags::Option | NSEventModifierFlags::Command;
         ui::add_menu(
             mtm,
@@ -1430,6 +1491,71 @@ impl AppDelegate {
         self.reload_sidebar();
         self.update_window_title();
         self.update_backdrop();
+        self.update_now_playing();
+    }
+
+    /// YouTube Music's player bar changed: keep its track, fetch new artwork, refresh the card.
+    fn on_now_playing(&self, track: web::Track) {
+        let ivars = self.ivars();
+        let artwork = track.artwork_url();
+        let stale = ivars
+            .artwork
+            .borrow()
+            .as_ref()
+            .is_some_and(|(url, _)| Some(url) != artwork.as_ref());
+        if stale {
+            *ivars.artwork.borrow_mut() = None;
+        }
+        if let Some(url) = artwork
+            && ivars.artwork.borrow().is_none()
+        {
+            load_image(url, AppDelegate::on_artwork);
+        }
+        *ivars.track.borrow_mut() = track;
+        self.update_now_playing();
+    }
+
+    /// Shows downloaded artwork if it still belongs to the current track.
+    fn on_artwork(&self, url: &str, bytes: Vec<u8>) {
+        let ivars = self.ivars();
+        if ivars.track.borrow().artwork_url().as_deref() != Some(url) {
+            return;
+        }
+        let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes))
+        else {
+            return;
+        };
+        *ivars.artwork.borrow_mut() = Some((url.to_owned(), image));
+        self.update_now_playing();
+    }
+
+    /// The sidebar card shows what Music is playing while the YouTube section is shown; in the
+    /// Music section YouTube Music's own player bar is on screen.
+    fn update_now_playing(&self) {
+        let ivars = self.ivars();
+        let Some(card) = ivars.now_playing.get() else {
+            return;
+        };
+        let track = ivars.track.borrow();
+        if track.title.is_empty() || ivars.mode.get() == Mode::Music {
+            card.hide();
+            return;
+        }
+        let artwork = ivars.artwork.borrow();
+        card.show(
+            &track.title,
+            &track.artist,
+            track.playing,
+            artwork.as_ref().map(|(_, image)| &**image),
+        );
+    }
+
+    /// Presses YouTube Music's own player-bar button; the Music section keeps its page and
+    /// player while the YouTube section is shown.
+    fn music_control(&self, action: &str) {
+        if let Some(pane) = self.pane(Mode::Music) {
+            run_js(&pane.web, &web::music_control_script(action));
+        }
     }
 
     /// Matches the content background, and with it the strip behind the toolbar, to the active page.
@@ -1725,6 +1851,20 @@ impl AppDelegate {
             web.is_some_and(|web| unsafe { web.canGoBack() })
         } else if action == sel!(goForward:) {
             web.is_some_and(|web| unsafe { web.canGoForward() })
+        } else if action == sel!(musicPlayPause:) {
+            let track = self.ivars().track.borrow();
+            item.setTitle(&ns(if track.playing { "Pause" } else { "Play" }));
+            !track.title.is_empty()
+        } else if action == sel!(musicNext:) || action == sel!(musicPrevious:) {
+            // While text is being edited, Command-Left/Right keep moving the insertion point:
+            // a disabled menu item lets the key equivalent through to the field editor.
+            let editing = self
+                .ivars()
+                .window
+                .get()
+                .and_then(|window| window.firstResponder())
+                .is_some_and(|responder| responder.isKindOfClass(NSText::class()));
+            !editing && !self.ivars().track.borrow().title.is_empty()
         } else if action == sel!(saveCurrentVideo:) {
             self.save_state_for_current() == Some(false)
         } else if action == sel!(openSaved:) || action == sel!(removeSaved:) {
@@ -2295,6 +2435,11 @@ impl AppDelegate {
         };
         pane.loaded.set(false);
         pane.pip_active.set(false);
+        if mode == Mode::Music {
+            // The player bar went with the process; the reloaded page reports again once playing.
+            *self.ivars().track.borrow_mut() = web::Track::default();
+            self.update_now_playing();
+        }
         let now = Instant::now();
         let repeated = pane
             .ended_at
@@ -2878,9 +3023,10 @@ fn toolbar_identifiers() -> Retained<NSArray<NSString>> {
     NSArray::from_slice(&ids)
 }
 
-/// Downloads an account photo off the main thread, then hands it to the app delegate.
-fn load_account_photo(url: String) {
-    // ponytail: one small image per sign-in, so a plain blocking fetch on a worker thread.
+/// Downloads a small image (account photo or artwork) off the main thread, then hands it to
+/// `done` on the app delegate.
+fn load_image(url: String, done: fn(&AppDelegate, &str, Vec<u8>)) {
+    // ponytail: one small image per account or track, so a plain blocking fetch on a worker thread.
     std::thread::spawn(move || {
         let Some(bytes) = NSURL::URLWithString(&ns(&url))
             .and_then(|target| NSData::dataWithContentsOfURL(&target))
@@ -2894,7 +3040,7 @@ fn load_account_photo(url: String) {
             if let Some(this) = delegate.as_deref().and_then(|delegate| {
                 AsRef::<AnyObject>::as_ref(delegate).downcast_ref::<AppDelegate>()
             }) {
-                this.on_account_photo(&url, bytes);
+                done(this, &url, bytes);
             }
         });
     });

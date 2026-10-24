@@ -243,6 +243,30 @@ pub enum PageMessage {
         #[serde(default)]
         response: String,
     },
+    /// YouTube Music's player bar changed track or play state.
+    #[serde(rename = "nowplaying")]
+    NowPlaying(Track),
+}
+
+/// What YouTube Music's player bar is on, from the page's Media Session metadata.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct Track {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+    /// Largest artwork URL the page offers; only Google image hosts are ever downloaded.
+    #[serde(default)]
+    pub artwork: String,
+    #[serde(default)]
+    pub playing: bool,
+}
+
+impl Track {
+    /// Artwork to download: HTTPS on Google's image hosts only.
+    pub fn artwork_url(&self) -> Option<String> {
+        google_image_url(&self.artwork)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -254,12 +278,12 @@ pub struct AccountIdentity {
     pub photo: Option<String>,
 }
 
-/// Accepts only HTTPS photo URLs on Google's avatar hosts.
-fn account_photo_url(url: &str) -> Option<String> {
+/// Accepts only HTTPS image URLs on Google's avatar, artwork, and thumbnail hosts.
+fn google_image_url(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?;
     (parsed.scheme() == "https"
-        && [".ggpht.com", ".googleusercontent.com"]
+        && [".ggpht.com", ".googleusercontent.com", ".ytimg.com"]
             .iter()
             .any(|suffix| host.ends_with(suffix)))
     .then(|| url.to_owned())
@@ -309,7 +333,7 @@ pub fn parse_account_identity(response: &str) -> Option<AccountIdentity> {
                     let photo = item
                         .pointer("/accountPhoto/thumbnails")
                         .and_then(|thumbnails| thumbnails.as_array()?.last()?.get("url")?.as_str())
-                        .and_then(account_photo_url);
+                        .and_then(google_image_url);
                     *selected = Some((
                         name.to_owned(),
                         handle,
@@ -432,7 +456,14 @@ pub fn page_script() -> String {
 }})();"#
     );
     script.push_str(&fullscreen_shim_script());
+    script.push_str(&include_str!("music_player.js").replace("__DOOTUBE_HANDLER__", MESSAGE_HANDLER));
     script
+}
+
+/// Presses YouTube Music's own player-bar button for `action` (`playpause`, `next`, or
+/// `previous`); see `music_player.js`.
+pub fn music_control_script(action: &str) -> String {
+    format!("window.__dootubeControl && window.__dootubeControl({action:?})")
 }
 
 /// Keep page fullscreen events in the main app window instead of asking WebKit to create its
@@ -697,6 +728,37 @@ mod tests {
             matches!(parse(r#"{"type":"audible","title":"Song"}"#), PageMessage::Audible { title } if title == "Song")
         );
         assert!(pip_failure_notice("NotAllowedError").contains("Click the video"));
+        let PageMessage::NowPlaying(track) = parse(
+            r#"{"type":"nowplaying","title":"Song","artist":"Artist","artwork":"https://lh3.googleusercontent.com/a=w544","playing":true}"#,
+        ) else {
+            panic!("nowplaying payload");
+        };
+        assert_eq!(
+            track,
+            Track {
+                title: "Song".into(),
+                artist: "Artist".into(),
+                artwork: "https://lh3.googleusercontent.com/a=w544".into(),
+                playing: true,
+            }
+        );
+    }
+
+    #[test]
+    fn track_artwork_downloads_only_from_google_image_hosts() {
+        let artwork = |url: &str| {
+            Track {
+                artwork: url.into(),
+                ..Track::default()
+            }
+            .artwork_url()
+        };
+        assert!(artwork("https://i.ytimg.com/vi/x/sddefault.jpg").is_some());
+        assert!(artwork("https://lh3.googleusercontent.com/a=w544").is_some());
+        assert_eq!(artwork("http://i.ytimg.com/vi/x/sddefault.jpg"), None);
+        assert_eq!(artwork("https://ytimg.com.example.org/a.jpg"), None);
+        assert_eq!(artwork("https://example.com/i.ytimg.com.jpg"), None);
+        assert_eq!(artwork(""), None);
     }
 
     #[test]

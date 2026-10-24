@@ -5,13 +5,14 @@ use objc2::{
     runtime::{AnyObject, Bool, Sel},
 };
 use objc2_app_kit::{
-    NSBezierPath, NSBox, NSBoxType, NSButton, NSColor, NSControlSize, NSFont, NSFontWeightRegular,
-    NSFontWeightSemibold, NSImage, NSImageScaling, NSImageSymbolConfiguration, NSImageView,
-    NSLayoutConstraint, NSLineBreakMode, NSMenu, NSMenuItem, NSProgressIndicator,
+    NSBezierPath, NSBox, NSBoxType, NSButton, NSColor, NSCompositingOperation, NSControlSize,
+    NSFont, NSFontWeightRegular, NSFontWeightSemibold, NSImage, NSImageScaling,
+    NSImageSymbolConfiguration, NSImageView, NSLayoutAttribute, NSLayoutConstraint,
+    NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuItem, NSProgressIndicator,
     NSProgressIndicatorStyle, NSStackView, NSTableCellView, NSTextAlignment, NSTextField,
     NSUserInterfaceLayoutOrientation, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
 
 pub fn ns(text: &str) -> Retained<NSString> {
     NSString::from_str(text)
@@ -27,6 +28,28 @@ pub fn circular_image(image: &NSImage, size: f64) -> Retained<NSImage> {
     let draw = block2::RcBlock::new(move |rect: NSRect| -> Bool {
         NSBezierPath::bezierPathWithOvalInRect(rect).addClip();
         image.drawInRect(rect);
+        Bool::YES
+    });
+    NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(size, size), false, &draw)
+}
+
+/// Fills a `size`-point square with `image`, cropped to its center, with rounded corners.
+pub fn rounded_image(image: &NSImage, size: f64, radius: f64) -> Retained<NSImage> {
+    let image = image.retain();
+    let draw = block2::RcBlock::new(move |rect: NSRect| -> Bool {
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, radius, radius).addClip();
+        let source = image.size();
+        let side = source.width.min(source.height);
+        let crop = NSRect::new(
+            NSPoint::new((source.width - side) / 2., (source.height - side) / 2.),
+            NSSize::new(side, side),
+        );
+        image.drawInRect_fromRect_operation_fraction(
+            rect,
+            crop,
+            NSCompositingOperation::SourceOver,
+            1.,
+        );
         Bool::YES
     });
     NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(size, size), false, &draw)
@@ -323,6 +346,136 @@ impl Notice {
 
     pub fn show(&self, text: &str) {
         self.label.setStringValue(&ns(text));
+        self.root.setHidden(false);
+    }
+
+    pub fn hide(&self) {
+        self.root.setHidden(true);
+    }
+}
+
+/// Side length of the Now Playing artwork, in points.
+const ARTWORK_SIZE: f64 = 36.;
+
+/// Sidebar card for what YouTube Music is playing: artwork (click to show the Music section),
+/// title, artist, and previous / play-pause / next buttons.
+pub struct NowPlayingCard {
+    pub root: Retained<NSStackView>,
+    pub artwork: Retained<NSButton>,
+    title: Retained<NSTextField>,
+    artist: Retained<NSTextField>,
+    pub previous: Retained<NSButton>,
+    pub play_pause: Retained<NSButton>,
+    pub next: Retained<NSButton>,
+}
+
+impl NowPlayingCard {
+    pub fn new(mtm: MainThreadMarker) -> Self {
+        let artwork = NSButton::new(mtm);
+        artwork.setBordered(false);
+        artwork.setTitle(&ns(""));
+        artwork.setImageScaling(NSImageScaling::ScaleNone);
+        artwork.setToolTip(Some(&ns("Show YouTube Music")));
+        artwork.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let title = label(mtm, "");
+        title.setFont(Some(&NSFont::systemFontOfSize_weight(12., unsafe {
+            NSFontWeightSemibold
+        })));
+        let artist = label(mtm, "");
+        artist.setFont(Some(&NSFont::systemFontOfSize(11.)));
+        artist.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        for field in [&title, &artist] {
+            // Long names truncate instead of widening the sidebar.
+            field.setContentCompressionResistancePriority_forOrientation(
+                1.,
+                NSLayoutConstraintOrientation::Horizontal,
+            );
+        }
+        let labels = NSStackView::new(mtm);
+        labels.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        labels.setAlignment(NSLayoutAttribute::Leading);
+        labels.setSpacing(1.);
+        labels.addArrangedSubview(&title);
+        labels.addArrangedSubview(&artist);
+        let info = NSStackView::new(mtm);
+        info.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        info.setSpacing(8.);
+        info.addArrangedSubview(&artwork);
+        info.addArrangedSubview(&labels);
+
+        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(14., unsafe {
+            NSFontWeightRegular
+        });
+        let control = |name: &str, description: &str| {
+            let button = NSButton::new(mtm);
+            button.setBordered(false);
+            button.setTitle(&ns(""));
+            button.setImage(symbol(name, description).as_deref());
+            button.setSymbolConfiguration(Some(&config));
+            button.setToolTip(Some(&ns(description)));
+            button
+        };
+        let previous = control("backward.fill", "Previous");
+        let play_pause = control("play.fill", "Play");
+        let next = control("forward.fill", "Next");
+        let controls = NSStackView::new(mtm);
+        controls.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        controls.setSpacing(22.);
+        for button in [&previous, &play_pause, &next] {
+            controls.addArrangedSubview(button);
+        }
+
+        let root = NSStackView::new(mtm);
+        root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        root.setAlignment(NSLayoutAttribute::CenterX);
+        root.setSpacing(8.);
+        root.setEdgeInsets(NSEdgeInsets {
+            top: 10.,
+            left: 12.,
+            bottom: 12.,
+            right: 12.,
+        });
+        root.addArrangedSubview(&info);
+        root.addArrangedSubview(&controls);
+        activate(&[
+            artwork.widthAnchor().constraintEqualToConstant(ARTWORK_SIZE),
+            artwork.heightAnchor().constraintEqualToConstant(ARTWORK_SIZE),
+            info.leadingAnchor()
+                .constraintEqualToAnchor_constant(&root.leadingAnchor(), 12.),
+            info.trailingAnchor()
+                .constraintEqualToAnchor_constant(&root.trailingAnchor(), -12.),
+        ]);
+        root.setHidden(true);
+        Self {
+            root,
+            artwork,
+            title,
+            artist,
+            previous,
+            play_pause,
+            next,
+        }
+    }
+
+    /// Shows the track; `artwork` is the downloaded cover, if any.
+    pub fn show(&self, title: &str, artist: &str, playing: bool, artwork: Option<&NSImage>) {
+        self.title.setStringValue(&ns(title));
+        self.title.setToolTip(Some(&ns(title)));
+        self.artist.setStringValue(&ns(artist));
+        self.artist.setHidden(artist.is_empty());
+        let image = match artwork {
+            Some(artwork) => Some(rounded_image(artwork, ARTWORK_SIZE, 6.)),
+            // A template symbol, so it takes the button's tint in light and dark mode.
+            None => symbol("music.note", "No artwork"),
+        };
+        self.artwork.setImage(image.as_deref());
+        let (name, description) = if playing {
+            ("pause.fill", "Pause")
+        } else {
+            ("play.fill", "Play")
+        };
+        self.play_pause.setImage(symbol(name, description).as_deref());
+        self.play_pause.setToolTip(Some(&ns(description)));
         self.root.setHidden(false);
     }
 
