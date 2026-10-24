@@ -1597,7 +1597,7 @@ impl AppDelegate {
                 "Check your internet connection, then try again.",
             );
         } else {
-            placeholder.show_loading();
+            placeholder.show_loading(&format!("Loading {}", active_mode.label()));
         }
     }
 

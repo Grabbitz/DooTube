@@ -12,7 +12,10 @@ use objc2_app_kit::{
     NSProgressIndicatorStyle, NSStackView, NSTableCellView, NSTextAlignment, NSTextField,
     NSUserInterfaceLayoutOrientation, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString,
+};
+use std::cell::Cell;
 
 pub fn ns(text: &str) -> Retained<NSString> {
     NSString::from_str(text)
@@ -123,6 +126,12 @@ pub fn sidebar_cell(
     icon.setTranslatesAutoresizingMaskIntoConstraints(false);
     icon.setImage(symbol(symbol_name, title).as_deref());
     icon.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+    // One optical size for every row, so mixed symbols line up. Still a template image:
+    // the source list recolors it on selection, and nothing is redrawn while scrolling.
+    let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(16., unsafe {
+        NSFontWeightRegular
+    });
+    icon.setSymbolConfiguration(Some(&config));
     let text = label(mtm, title);
     if let Some(tooltip) = tooltip {
         cell.setToolTip(Some(&ns(tooltip)));
@@ -249,19 +258,21 @@ impl Placeholder {
             detail,
             retry,
         };
-        placeholder.show_loading();
+        placeholder.show_loading("Loading YouTube");
         placeholder
     }
 
-    pub fn show_loading(&self) {
+    /// Spinner plus a single status line. No progress number — the page doesn't report one.
+    pub fn show_loading(&self, title: &str) {
         for view in [
             self.icon.as_ref() as &NSView,
-            self.title.as_ref(),
             self.detail.as_ref(),
             self.retry.as_ref(),
         ] {
             view.setHidden(true);
         }
+        self.title.setStringValue(&ns(title));
+        self.title.setHidden(false);
         self.spinner.setHidden(false);
         unsafe { self.spinner.startAnimation(None) };
         self.root.setHidden(false);
@@ -367,6 +378,9 @@ pub struct NowPlayingCard {
     pub previous: Retained<NSButton>,
     pub play_pause: Retained<NSButton>,
     pub next: Retained<NSButton>,
+    /// Pointer of the source image already clipped for the artwork button.
+    /// Play/pause updates must not rasterize the cover again.
+    artwork_token: Cell<usize>,
 }
 
 impl NowPlayingCard {
@@ -378,7 +392,7 @@ impl NowPlayingCard {
         artwork.setToolTip(Some(&ns("Show YouTube Music")));
         artwork.setTranslatesAutoresizingMaskIntoConstraints(false);
         let title = label(mtm, "");
-        title.setFont(Some(&NSFont::systemFontOfSize_weight(12., unsafe {
+        title.setFont(Some(&NSFont::systemFontOfSize_weight(13., unsafe {
             NSFontWeightSemibold
         })));
         let artist = label(mtm, "");
@@ -403,47 +417,99 @@ impl NowPlayingCard {
         info.addArrangedSubview(&artwork);
         info.addArrangedSubview(&labels);
 
-        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(14., unsafe {
-            NSFontWeightRegular
-        });
-        let control = |name: &str, description: &str| {
+        // Skip stays quieter than play/pause. Both glyphs keep a fixed button frame,
+        // so toggling play does not move the row.
+        let skip_config =
+            NSImageSymbolConfiguration::configurationWithPointSize_weight(13., unsafe {
+                NSFontWeightRegular
+            });
+        let play_config =
+            NSImageSymbolConfiguration::configurationWithPointSize_weight(15., unsafe {
+                NSFontWeightSemibold
+            });
+        let control = |name: &str, description: &str, config: &NSImageSymbolConfiguration| {
             let button = NSButton::new(mtm);
             button.setBordered(false);
             button.setTitle(&ns(""));
             button.setImage(symbol(name, description).as_deref());
-            button.setSymbolConfiguration(Some(&config));
+            button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+            button.setSymbolConfiguration(Some(config));
             button.setToolTip(Some(&ns(description)));
+            button.setTranslatesAutoresizingMaskIntoConstraints(false);
             button
         };
-        let previous = control("backward.fill", "Previous");
-        let play_pause = control("play.fill", "Play");
-        let next = control("forward.fill", "Next");
+        let previous = control("backward.fill", "Previous", &skip_config);
+        let play_pause = control("play.fill", "Play", &play_config);
+        let next = control("forward.fill", "Next", &skip_config);
+        previous.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+        next.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+        play_pause.setContentTintColor(Some(&NSColor::labelColor()));
         let controls = NSStackView::new(mtm);
         controls.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        controls.setSpacing(22.);
+        controls.setSpacing(0.);
+        controls.setAlignment(NSLayoutAttribute::CenterY);
         for button in [&previous, &play_pause, &next] {
             controls.addArrangedSubview(button);
         }
 
+        let body = NSStackView::new(mtm);
+        body.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        body.setAlignment(NSLayoutAttribute::CenterX);
+        body.setSpacing(6.);
+        body.setEdgeInsets(NSEdgeInsets {
+            top: 8.,
+            left: 0.,
+            bottom: 8.,
+            right: 0.,
+        });
+        body.addArrangedSubview(&info);
+        body.addArrangedSubview(&controls);
+
+        // Hairline only — no material, shadow, or fill. Those would composite over the
+        // sidebar on every frame the window is visible.
+        let rule = NSBox::new(mtm);
+        rule.setBoxType(NSBoxType::Custom);
+        rule.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
+        rule.setBorderWidth(0.);
+        rule.setCornerRadius(0.);
+        rule.setFillColor(&NSColor::separatorColor());
+        rule.setContentHuggingPriority_forOrientation(
+            1000.,
+            NSLayoutConstraintOrientation::Vertical,
+        );
+
         let root = NSStackView::new(mtm);
         root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        root.setAlignment(NSLayoutAttribute::CenterX);
-        root.setSpacing(8.);
-        root.setEdgeInsets(NSEdgeInsets {
-            top: 10.,
-            left: 12.,
-            bottom: 12.,
-            right: 12.,
-        });
-        root.addArrangedSubview(&info);
-        root.addArrangedSubview(&controls);
+        root.setAlignment(NSLayoutAttribute::Leading);
+        root.setSpacing(0.);
+        root.addArrangedSubview(&rule);
+        root.addArrangedSubview(&body);
         activate(&[
-            artwork.widthAnchor().constraintEqualToConstant(ARTWORK_SIZE),
-            artwork.heightAnchor().constraintEqualToConstant(ARTWORK_SIZE),
+            artwork
+                .widthAnchor()
+                .constraintEqualToConstant(ARTWORK_SIZE),
+            artwork
+                .heightAnchor()
+                .constraintEqualToConstant(ARTWORK_SIZE),
             info.leadingAnchor()
-                .constraintEqualToAnchor_constant(&root.leadingAnchor(), 12.),
+                .constraintEqualToAnchor_constant(&body.leadingAnchor(), 12.),
             info.trailingAnchor()
-                .constraintEqualToAnchor_constant(&root.trailingAnchor(), -12.),
+                .constraintEqualToAnchor_constant(&body.trailingAnchor(), -12.),
+            previous.widthAnchor().constraintEqualToConstant(36.),
+            previous.heightAnchor().constraintEqualToConstant(28.),
+            play_pause.widthAnchor().constraintEqualToConstant(36.),
+            play_pause.heightAnchor().constraintEqualToConstant(28.),
+            next.widthAnchor().constraintEqualToConstant(36.),
+            next.heightAnchor().constraintEqualToConstant(28.),
+            rule.leadingAnchor()
+                .constraintEqualToAnchor(&root.leadingAnchor()),
+            rule.trailingAnchor()
+                .constraintEqualToAnchor(&root.trailingAnchor()),
+            rule.heightAnchor().constraintEqualToConstant(1.),
+            body.leadingAnchor()
+                .constraintEqualToAnchor(&root.leadingAnchor()),
+            body.trailingAnchor()
+                .constraintEqualToAnchor(&root.trailingAnchor()),
         ]);
         root.setHidden(true);
         Self {
@@ -454,6 +520,7 @@ impl NowPlayingCard {
             previous,
             play_pause,
             next,
+            artwork_token: Cell::new(usize::MAX),
         }
     }
 
@@ -463,18 +530,25 @@ impl NowPlayingCard {
         self.title.setToolTip(Some(&ns(title)));
         self.artist.setStringValue(&ns(artist));
         self.artist.setHidden(artist.is_empty());
-        let image = match artwork {
-            Some(artwork) => Some(rounded_image(artwork, ARTWORK_SIZE, 6.)),
-            // A template symbol, so it takes the button's tint in light and dark mode.
-            None => symbol("music.note", "No artwork"),
-        };
-        self.artwork.setImage(image.as_deref());
+        let token = artwork
+            .map(|image| image as *const NSImage as usize)
+            .unwrap_or(0);
+        if token != self.artwork_token.get() {
+            self.artwork_token.set(token);
+            let image = match artwork {
+                Some(artwork) => Some(rounded_image(artwork, ARTWORK_SIZE, 6.)),
+                // A template symbol, so it takes the button's tint in light and dark mode.
+                None => symbol("music.note", "No artwork"),
+            };
+            self.artwork.setImage(image.as_deref());
+        }
         let (name, description) = if playing {
             ("pause.fill", "Pause")
         } else {
             ("play.fill", "Play")
         };
-        self.play_pause.setImage(symbol(name, description).as_deref());
+        self.play_pause
+            .setImage(symbol(name, description).as_deref());
         self.play_pause.setToolTip(Some(&ns(description)));
         self.root.setHidden(false);
     }

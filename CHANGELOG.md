@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Now Playing card is separated from the sidebar list by a hairline, with a clearer play control and larger click targets. Switching play and pause no longer redraws the cover. The first-load state names what is loading.
 - Added Now Playing for YouTube Music: while the YouTube section is shown, the sidebar shows the playing track's artwork, title, and artist with Previous, Play/Pause, and Next; click the artwork to go to Music.
 - Added a Controls menu (Play/Pause ⌘P, Next ⌘→, Previous ⌘←) that controls YouTube Music from either section. Next and Previous step aside while you're typing, so ⌘←/⌘→ still move the cursor.
 - YouTube Music now offers next and previous to the system's media controls by pressing its own player-bar buttons (not yet tested with the keyboard's media keys or Control Center).
