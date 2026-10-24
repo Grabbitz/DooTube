@@ -243,6 +243,13 @@ pub enum PageMessage {
         #[serde(default)]
         response: String,
     },
+    /// How far the watch page's video has played, sent every 15 s while it plays and when it
+    /// pauses, ends, or the page navigates away. `url` is the page it played on.
+    Progress {
+        url: String,
+        seconds: f64,
+        duration: f64,
+    },
     /// YouTube Music's player bar changed track or play state.
     #[serde(rename = "nowplaying")]
     NowPlaying(Track),
@@ -433,7 +440,7 @@ pub fn page_script() -> String {
     let youtube_css = serde_json::to_string(include_str!("youtube_chrome.css")).expect("string");
     let music_css = serde_json::to_string(include_str!("music_chrome.css")).expect("string");
     let mut script = format!(
-        r#"(() => {{
+        r##"(() => {{
   const host = location.hostname;
   const css = host === "music.youtube.com" ? {music_css}
     : ["www.youtube.com", "youtube.com", "m.youtube.com"].includes(host) ? {youtube_css} : null;
@@ -453,7 +460,25 @@ pub fn page_script() -> String {
   document.addEventListener("volumechange", report, true);
   document.addEventListener("enterpictureinpicture", () => post({{ type: "pip", active: true }}), true);
   document.addEventListener("leavepictureinpicture", () => post({{ type: "pip", active: false }}), true);
-}})();"#
+  if (["www.youtube.com", "youtube.com", "m.youtube.com"].includes(host)) {{
+    // Where the watch page's video is, so a saved video can resume there. Ads are skipped.
+    let lastProgress = 0;
+    const progress = (now) => {{
+      if (location.pathname !== "/watch") return;
+      const player = document.querySelector("#movie_player");
+      const video = player && player.querySelector("video");
+      if (!video || player.classList.contains("ad-showing")) return;
+      if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+      if (!now && Date.now() - lastProgress < 15000) return;
+      lastProgress = Date.now();
+      post({{ type: "progress", url: location.href, seconds: video.currentTime, duration: video.duration }});
+    }};
+    document.addEventListener("timeupdate", () => progress(false), true);
+    for (const name of ["pause", "ended"]) document.addEventListener(name, () => progress(true), true);
+    document.addEventListener("yt-navigate-start", () => progress(true), true);
+    window.addEventListener("pagehide", () => progress(true));
+  }}
+}})();"##
     );
     script.push_str(&fullscreen_shim_script());
     script.push_str(&include_str!("music_player.js").replace("__DOOTUBE_HANDLER__", MESSAGE_HANDLER));
@@ -728,6 +753,11 @@ mod tests {
             matches!(parse(r#"{"type":"audible","title":"Song"}"#), PageMessage::Audible { title } if title == "Song")
         );
         assert!(pip_failure_notice("NotAllowedError").contains("Click the video"));
+        assert!(matches!(
+            parse(r#"{"type":"progress","url":"https://www.youtube.com/watch?v=a","seconds":61.5,"duration":600}"#),
+            PageMessage::Progress { url, seconds, duration }
+                if url.ends_with("v=a") && seconds == 61.5 && duration == 600.
+        ));
         let PageMessage::NowPlaying(track) = parse(
             r#"{"type":"nowplaying","title":"Song","artist":"Artist","artwork":"https://lh3.googleusercontent.com/a=w544","playing":true}"#,
         ) else {

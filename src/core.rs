@@ -184,6 +184,16 @@ pub struct QueueItem {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Where the video was left, in whole seconds; `None` to start from the beginning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
+}
+
+/// Where to resume a video left at `seconds` of `duration`: `None` near the start, or near the
+/// end where YouTube would only show the end screen.
+pub fn resume_point(seconds: f64, duration: f64) -> Option<u32> {
+    (seconds.is_finite() && duration.is_finite() && seconds >= 10. && duration - seconds >= 20.)
+        .then_some(seconds as u32)
 }
 
 impl QueueItem {
@@ -196,6 +206,43 @@ impl QueueItem {
             .clone()
             .or_else(|| self.video_id())
             .unwrap_or_else(|| "YouTube video".to_owned())
+    }
+    /// The link to open: YouTube watch links start at the saved position (replacing any `t` or
+    /// `start` already in the link). Music, Shorts, and live links open as saved.
+    pub fn resume_url(&self) -> String {
+        let Some(position) = self.position else {
+            return self.url.clone();
+        };
+        let Ok(mut url) = Url::parse(&self.url) else {
+            return self.url.clone();
+        };
+        let host = url.host_str().unwrap_or_default();
+        let watch = (host == "youtu.be" && video_id(&url).is_some())
+            || (!is_music_url(&url) && url.path() == "/watch" && video_id(&url).is_some());
+        if !watch {
+            return self.url.clone();
+        }
+        let kept: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key != "t" && key != "start")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        url.query_pairs_mut()
+            .clear()
+            .extend_pairs(kept)
+            .append_pair("t", &format!("{position}s"));
+        url.into()
+    }
+    /// YouTube's medium (320×180) thumbnail for the saved video, when its ID looks like one.
+    pub fn thumbnail_url(&self) -> Option<String> {
+        self.video_id()
+            .filter(|id| {
+                id.len() <= 32
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+            .map(|id| format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"))
     }
 }
 
@@ -220,6 +267,7 @@ impl AppState {
         self.up_next.push(QueueItem {
             url: url.as_str().to_owned(),
             title,
+            position: None,
         });
         true
     }
@@ -229,6 +277,27 @@ impl AppState {
         }
         self.up_next.remove(index);
         true
+    }
+    /// Records where the saved item for `url`'s video was left; `false` when it isn't saved or
+    /// nothing changed.
+    pub fn set_position(&mut self, url: &Url, position: Option<u32>) -> bool {
+        match self.position(url).map(|index| &mut self.up_next[index]) {
+            Some(item) if item.position != position => {
+                item.position = position;
+                true
+            }
+            _ => false,
+        }
+    }
+    /// Where item `from` lands when dropped in the gap before item `gap` (`len` is after the
+    /// last). `None` when either is out of range or the item would stay where it is.
+    pub fn drop_destination(&self, from: usize, gap: usize) -> Option<usize> {
+        if from >= self.up_next.len() || gap > self.up_next.len() {
+            return None;
+        }
+        // Removing the item first shifts every later gap up by one.
+        let to = if gap > from { gap - 1 } else { gap };
+        (to != from).then_some(to)
     }
     pub fn move_item(&mut self, from: usize, to: usize) -> bool {
         if from >= self.up_next.len() || to >= self.up_next.len() {
@@ -443,6 +512,97 @@ mod tests {
         assert!(state.remove(1));
         assert!(!state.remove(4));
     }
+    #[test]
+    fn dropping_between_saved_rows_moves_to_that_gap() {
+        let mut state = AppState::default();
+        for id in ["a", "b", "c"] {
+            state.add(
+                &Url::parse(&format!("https://youtu.be/{id}")).unwrap(),
+                None,
+            );
+        }
+        // Gaps before and after the item itself leave it in place.
+        assert_eq!(state.drop_destination(1, 1), None);
+        assert_eq!(state.drop_destination(1, 2), None);
+        assert_eq!(state.drop_destination(0, 3), Some(2));
+        assert_eq!(state.drop_destination(2, 0), Some(0));
+        assert_eq!(state.drop_destination(0, 2), Some(1));
+        assert_eq!(state.drop_destination(3, 0), None);
+        assert_eq!(state.drop_destination(0, 4), None);
+        let to = state.drop_destination(0, 3).unwrap();
+        assert!(state.move_item(0, to));
+        let ids: Vec<_> = state
+            .up_next
+            .iter()
+            .filter_map(QueueItem::video_id)
+            .collect();
+        assert_eq!(ids, ["b", "c", "a"]);
+    }
+
+    #[test]
+    fn saved_videos_resume_where_they_were_left() {
+        let mut state = AppState::default();
+        let watch = Url::parse("https://www.youtube.com/watch?v=abc&list=PL1&t=5s").unwrap();
+        assert!(state.add(&watch, None));
+        assert_eq!(state.up_next[0].resume_url(), watch.as_str());
+        let other_form = Url::parse("https://youtu.be/abc").unwrap();
+        assert!(state.set_position(&other_form, Some(754)));
+        assert!(!state.set_position(&other_form, Some(754)));
+        assert_eq!(
+            state.up_next[0].resume_url(),
+            "https://www.youtube.com/watch?v=abc&list=PL1&t=754s"
+        );
+        assert!(!state.set_position(&Url::parse("https://youtu.be/zzz").unwrap(), Some(9)));
+
+        let item = |url: &str| QueueItem {
+            url: url.to_owned(),
+            title: None,
+            position: Some(60),
+        };
+        assert_eq!(
+            item("https://youtu.be/abc?start=3").resume_url(),
+            "https://youtu.be/abc?t=60s"
+        );
+        for unchanged in [
+            "https://music.youtube.com/watch?v=abc",
+            "https://www.youtube.com/shorts/abc",
+            "https://www.youtube.com/live/abc",
+        ] {
+            assert_eq!(item(unchanged).resume_url(), unchanged);
+        }
+
+        assert_eq!(resume_point(5., 600.), None);
+        assert_eq!(resume_point(125.9, 600.), Some(125));
+        assert_eq!(resume_point(590., 600.), None);
+        assert_eq!(resume_point(f64::NAN, 600.), None);
+        assert_eq!(resume_point(100., f64::INFINITY), None);
+    }
+
+    #[test]
+    fn saved_videos_have_a_thumbnail_only_for_plain_video_ids() {
+        let thumbnail = |url: &str| {
+            QueueItem {
+                url: url.to_owned(),
+                title: None,
+                position: None,
+            }
+            .thumbnail_url()
+        };
+        assert_eq!(
+            thumbnail("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=5").as_deref(),
+            Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg")
+        );
+        assert_eq!(
+            thumbnail("https://music.youtube.com/watch?v=abc_-123").as_deref(),
+            Some("https://i.ytimg.com/vi/abc_-123/mqdefault.jpg")
+        );
+        assert_eq!(
+            thumbnail("https://www.youtube.com/watch?v=a%2F..%2Fb"),
+            None
+        );
+        assert_eq!(thumbnail("https://www.youtube.com/feed/history"), None);
+    }
+
     #[test]
     fn same_video_in_another_link_form_is_not_saved_twice() {
         let mut state = AppState::default();
