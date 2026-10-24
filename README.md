@@ -27,6 +27,7 @@ xattr -dr com.apple.quarantine /Applications/DooTube.app
 | --- | --- |
 | ⌘L | Search |
 | ⌘[ / ⌘] | Back / Forward |
+| ⇧⌘H | Home |
 | ⌘R | Reload |
 | ⌃⌘S | Toggle sidebar |
 | ⌃⌘F | Window full screen |

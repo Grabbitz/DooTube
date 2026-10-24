@@ -153,13 +153,30 @@ pub fn video_id(url: &Url) -> Option<String> {
 
 /// Turns a YouTube or YouTube Music document title into a display title, or `None` for generic page titles.
 pub fn clean_page_title(title: &str) -> Option<String> {
-    let title = title.trim();
+    let title = strip_notification_count(title.trim());
     let title = title
         .strip_suffix(" - YouTube Music")
         .or_else(|| title.strip_suffix(" - YouTube"))
         .unwrap_or(title)
         .trim();
     (!title.is_empty() && title != "YouTube" && title != "YouTube Music").then(|| title.to_owned())
+}
+
+/// Removes the unread-notification count YouTube prefixes to the document title for signed-in
+/// accounts: `(1) `…`(99) ` or `(99+) `. Longer numbers, such as a year, belong to the title.
+fn strip_notification_count(title: &str) -> &str {
+    let Some((count, rest)) = title
+        .strip_prefix('(')
+        .and_then(|title| title.split_once(") "))
+    else {
+        return title;
+    };
+    let digits = count.strip_suffix('+').unwrap_or(count);
+    if (1..=2).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        rest
+    } else {
+        title
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -447,7 +464,7 @@ mod tests {
         assert_eq!(video_id(&page), None);
     }
     #[test]
-    fn page_titles_drop_only_the_youtube_suffix() {
+    fn page_titles_drop_the_youtube_suffix_and_notification_count() {
         assert_eq!(
             clean_page_title("(2024) Me at the zoo - YouTube").as_deref(),
             Some("(2024) Me at the zoo")
@@ -460,8 +477,17 @@ mod tests {
             clean_page_title("Song - YouTube Music").as_deref(),
             Some("Song")
         );
+        assert_eq!(
+            clean_page_title("(3) Me at the zoo - YouTube").as_deref(),
+            Some("Me at the zoo")
+        );
+        assert_eq!(
+            clean_page_title("(99+) (2024) Me at the zoo - YouTube").as_deref(),
+            Some("(2024) Me at the zoo")
+        );
         assert_eq!(clean_page_title("YouTube Music"), None);
         assert_eq!(clean_page_title("YouTube"), None);
+        assert_eq!(clean_page_title("(1) YouTube"), None);
         assert_eq!(clean_page_title("  "), None);
     }
     #[test]

@@ -2,7 +2,10 @@
 use objc2::rc::Retained;
 use objc2_web_kit::WKWebView;
 use serde::Deserialize;
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    time::Instant,
+};
 use url::Url;
 
 use crate::{
@@ -162,8 +165,15 @@ pub struct Pane {
     pub web: Retained<WKWebView>,
     /// A page has committed at least once (and the web process has not ended since).
     pub loaded: Cell<bool>,
-    /// The first load failed; shown instead of the spinner until a retry commits.
+    /// The first load failed, or the web process ended again soon after a reload; shown instead
+    /// of the spinner until a retry commits.
     pub failed: Cell<bool>,
+    /// `failed` because the web process ended repeatedly, not because the network failed.
+    pub stopped: Cell<bool>,
+    /// When WebKit last ended this pane's web process, to tell a one-off from a reload loop.
+    pub ended_at: Cell<Option<Instant>>,
+    /// The web process ended while this section was in the background; reload when it is shown.
+    pub reload_when_shown: Cell<bool>,
     /// Last page DooTube requested here; used to retry and to know whether the pane was ever opened.
     pub last_requested: RefCell<Option<String>>,
     /// Video ID of the page when the document title last changed, so a title is
@@ -181,6 +191,9 @@ impl Pane {
             web,
             loaded: Cell::new(false),
             failed: Cell::new(false),
+            stopped: Cell::new(false),
+            ended_at: Cell::new(None),
+            reload_when_shown: Cell::new(false),
             last_requested: RefCell::new(None),
             title_video: RefCell::new(None),
             now_playing: RefCell::new(None),

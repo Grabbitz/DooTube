@@ -29,7 +29,8 @@ use objc2_app_kit::{
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier, NSView,
     NSViewController, NSViewFrameDidChangeNotification, NSWindow, NSWindowCollectionBehavior,
-    NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle, NSWorkspace,
+    NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSError, NSHTTPCookie, NSIndexSet, NSInteger,
@@ -46,12 +47,13 @@ use objc2_web_kit::{
     WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
     WKNavigationType, WKScriptMessage, WKScriptMessageHandler, WKUIDelegate,
     WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebView,
-    WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
+    WKSnapshotConfiguration, WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
 };
 use std::{
     cell::{Cell, OnceCell, RefCell},
     ffi::c_void,
     ptr::NonNull,
+    time::{Duration, Instant},
 };
 use ui::ns;
 use url::Url;
@@ -59,6 +61,7 @@ use web::{Mode, PageMessage, PageRect, Pane};
 
 const BACK_ID: &str = "dootube.back";
 const FORWARD_ID: &str = "dootube.forward";
+const HOME_ID: &str = "dootube.home";
 const MODE_ID: &str = "dootube.mode";
 const SEARCH_ID: &str = "dootube.search";
 const SAVE_ID: &str = "dootube.save";
@@ -67,7 +70,13 @@ const ACCOUNT_ID: &str = "dootube.account";
 const SIGN_OUT_URL: &str = "https://www.youtube.com/logout";
 /// Tag for sidebar context-menu items, which act on the clicked row rather than the selection.
 const CONTEXT_TAG: NSInteger = 1;
-const OBSERVED_WEB_KEYS: [&str; 4] = ["URL", "title", "canGoBack", "canGoForward"];
+const OBSERVED_WEB_KEYS: [&str; 5] = [
+    "URL",
+    "title",
+    "canGoBack",
+    "canGoForward",
+    "underPageBackgroundColor",
+];
 fn is_youtube_main_frame(message: &WKScriptMessage) -> bool {
     let frame = unsafe { message.frameInfo() };
     if !unsafe { frame.isMainFrame() } {
@@ -139,16 +148,22 @@ struct AppIvars {
     zoom_generation: Cell<u64>,
     /// Where the video sat on the page, in stage coordinates; the zoom starts and ends here.
     stage_start: Cell<NSRect>,
+    /// Where the video sat on the page, in the main window's container; the video's last frame
+    /// is laid there while the page returns from full screen.
+    stage_player: Cell<NSRect>,
     /// Presentation options to restore; set only when the stage hid the Dock and menu bar.
     saved_presentation: Cell<Option<NSApplicationPresentationOptions>>,
     stage: OnceCell<Stage>,
     container: OnceCell<Retained<NSView>>,
+    /// Fills the content area, including the strip behind the toolbar, with the page's background.
+    backdrop: OnceCell<Retained<NSBox>>,
     native_fullscreen: Cell<bool>,
     sidebar: OnceCell<Retained<NSTableView>>,
     search: OnceCell<Retained<NSSearchToolbarItem>>,
     mode_control: OnceCell<Retained<NSSegmentedControl>>,
     back_item: OnceCell<Retained<NSToolbarItem>>,
     forward_item: OnceCell<Retained<NSToolbarItem>>,
+    home_item: OnceCell<Retained<NSToolbarItem>>,
     mode_item: OnceCell<Retained<NSToolbarItem>>,
     save_item: OnceCell<Retained<NSToolbarItem>>,
     pip_item: OnceCell<Retained<NSToolbarItem>>,
@@ -200,6 +215,9 @@ struct Stage {
     /// WebKit never relayouts mid-animation.
     host: Retained<NSView>,
     snapshot: Retained<NSImageView>,
+    /// The video's frame as the zoom-out ended, laid over `snapshot` at the player's spot so the
+    /// page doesn't flash back to the frame from when full screen began.
+    frame: Retained<NSImageView>,
 }
 
 impl Stage {
@@ -429,11 +447,7 @@ define_class!(
         }
         #[unsafe(method(webViewWebContentProcessDidTerminate:))]
         fn web_content_process_terminated(&self, web_view: &WKWebView) {
-            if let Some(pane) = self.pane_of(web_view) {
-                pane.loaded.set(false);
-                pane.failed.set(true);
-                self.show_active_pane();
-            }
+            self.on_web_process_ended(web_view);
         }
     }
 
@@ -568,6 +582,7 @@ define_class!(
             match identifier.to_string().as_str() {
                 BACK_ID => ivars.back_item.get().cloned(),
                 FORWARD_ID => ivars.forward_item.get().cloned(),
+                HOME_ID => ivars.home_item.get().cloned(),
                 MODE_ID => ivars.mode_item.get().cloned(),
                 SAVE_ID => ivars.save_item.get().cloned(),
                 PIP_ID => ivars.pip_item.get().cloned(),
@@ -644,6 +659,7 @@ define_class!(
             };
             match key_path.map(|key| key.to_string()).as_deref() {
                 Some("title") => self.on_page_title_changed(web),
+                Some("underPageBackgroundColor") if self.is_active(web) => self.update_backdrop(),
                 Some(_) if self.is_active(web) => {
                     if key_path.is_some_and(|key| key.to_string() == "URL") {
                         self.on_page_url_changed();
@@ -729,6 +745,11 @@ define_class!(
                 unsafe { pane.web.goForward() };
             }
         }
+        #[unsafe(method(goHome:))]
+        fn action_home(&self, _sender: Option<&AnyObject>) {
+            let mode = self.ivars().mode.get();
+            self.load_in(mode, mode.home());
+        }
         #[unsafe(method(reloadPage:))]
         fn action_reload(&self, _sender: Option<&AnyObject>) {
             self.reload_page();
@@ -784,15 +805,18 @@ impl AppDelegate {
             fullscreen_id: Cell::new(0),
             zoom_generation: Cell::new(0),
             stage_start: Cell::new(NSRect::ZERO),
+            stage_player: Cell::new(NSRect::ZERO),
             saved_presentation: Cell::new(None),
             stage: OnceCell::new(),
             container: OnceCell::new(),
+            backdrop: OnceCell::new(),
             native_fullscreen: Cell::new(false),
             sidebar: OnceCell::new(),
             search: OnceCell::new(),
             mode_control: OnceCell::new(),
             back_item: OnceCell::new(),
             forward_item: OnceCell::new(),
+            home_item: OnceCell::new(),
             mode_item: OnceCell::new(),
             save_item: OnceCell::new(),
             pip_item: OnceCell::new(),
@@ -832,6 +856,9 @@ impl AppDelegate {
         };
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(ns_string!("DooTube"));
+        // The page already shows its own title; the toolbar keeps only controls. The title still
+        // names the window in the Window menu, Mission Control, and accessibility.
+        window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
         self.build_menus();
 
         let content = NSView::new(mtm);
@@ -846,6 +873,15 @@ impl AppDelegate {
             notice.close.setTarget(Some(self));
             notice.close.setAction(Some(sel!(hideNotice:)));
         }
+        let backdrop = NSBox::new(mtm);
+        backdrop.setBoxType(NSBoxType::Custom);
+        backdrop.setTitlePosition(NSTitlePosition::NoTitle);
+        backdrop.setBorderWidth(0.);
+        backdrop.setFrame(content.bounds());
+        backdrop.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        content.addSubview(&backdrop);
         let container = NSView::new(mtm);
         container.setTranslatesAutoresizingMaskIntoConstraints(false);
         let safe = content.safeAreaLayoutGuide();
@@ -874,6 +910,7 @@ impl AppDelegate {
             container.addSubview(&pane.web);
         }
         let _ = self.ivars().container.set(container.clone());
+        let _ = self.ivars().backdrop.set(backdrop);
         content.addSubview(&placeholder.root);
         content.addSubview(&notice.root);
         ui::activate(&[
@@ -1123,18 +1160,32 @@ impl AppDelegate {
             }
             item
         };
+        let navigational = |item: Retained<NSToolbarItem>| {
+            // Placed by AppKit at the leading edge, after the sidebar, like Finder and Safari.
+            item.setNavigational(true);
+            item
+        };
         ivars
             .back_item
-            .set(button(BACK_ID, "Back", "chevron.left", sel!(goBack:)))
+            .set(navigational(button(
+                BACK_ID,
+                "Back",
+                "chevron.left",
+                sel!(goBack:),
+            )))
             .ok();
         ivars
             .forward_item
-            .set(button(
+            .set(navigational(button(
                 FORWARD_ID,
                 "Forward",
                 "chevron.right",
                 sel!(goForward:),
-            ))
+            )))
+            .ok();
+        ivars
+            .home_item
+            .set(navigational(button(HOME_ID, "Home", "house", sel!(goHome:))))
             .ok();
         ivars
             .save_item
@@ -1274,6 +1325,7 @@ impl AppDelegate {
                 None,
                 Some(mine("Back", sel!(goBack:), "[")),
                 Some(mine("Forward", sel!(goForward:), "]")),
+                Some(mine("Home", sel!(goHome:), "H")),
                 Some(mine("Reload Page", sel!(reloadPage:), "r")),
                 None,
                 Some(with_mods(
@@ -1371,10 +1423,21 @@ impl AppDelegate {
             .is_some_and(|pane| pane.last_requested.borrow().is_none());
         if never_opened {
             self.load_in(mode, mode.home());
+        } else if self.pane(mode).is_some_and(|pane| pane.reload_when_shown.get()) {
+            self.reload_in(mode);
         }
         self.show_active_pane();
         self.reload_sidebar();
         self.update_window_title();
+        self.update_backdrop();
+    }
+
+    /// Matches the content background, and with it the strip behind the toolbar, to the active page.
+    fn update_backdrop(&self) {
+        if let (Some(backdrop), Some(pane)) = (self.ivars().backdrop.get(), self.active()) {
+            let color = unsafe { pane.web.underPageBackgroundColor() };
+            backdrop.setFillColor(&color);
+        }
     }
 
     /// Shows the active pane's page, or its loading/failure state, and hides the other pane.
@@ -1392,8 +1455,18 @@ impl AppDelegate {
         };
         if pane.loaded.get() {
             placeholder.hide();
+        } else if pane.failed.get() && pane.stopped.get() {
+            placeholder.show_failure(
+                "exclamationmark.triangle",
+                "A Problem Repeatedly Occurred",
+                &format!(
+                    "{} stopped working more than once. Try again to reload it.",
+                    active_mode.label()
+                ),
+            );
         } else if pane.failed.get() {
             placeholder.show_failure(
+                "wifi.exclamationmark",
                 &format!("Can't Reach {}", active_mode.label()),
                 "Check your internet connection, then try again.",
             );
@@ -1747,10 +1820,16 @@ impl AppDelegate {
 
     fn on_page_url_changed(&self) {
         let mode = self.ivars().mode.get();
-        if let Some(query) = self.current_url().and_then(|url| mode.search_query(&url))
-            && let Some(search) = self.ivars().search.get()
-        {
-            search.searchField().setStringValue(&ns(&query));
+        // Show the open results page's query; clear a stale one elsewhere unless it's being typed.
+        if let Some(search) = self.ivars().search.get() {
+            let field = search.searchField();
+            if field.currentEditor().is_none() {
+                let query = self
+                    .current_url()
+                    .and_then(|url| mode.search_query(&url))
+                    .unwrap_or_default();
+                field.setStringValue(&ns(&query));
+            }
         }
         self.sync_sidebar_selection();
         self.update_toolbar();
@@ -2166,6 +2245,8 @@ impl AppDelegate {
             return;
         };
         *pane.last_requested.borrow_mut() = Some(url.to_owned());
+        // This load replaces any pending reload of a page whose web process ended.
+        pane.reload_when_shown.set(false);
         if self.ivars().mode.get() != mode {
             self.switch_mode(mode);
         }
@@ -2174,21 +2255,61 @@ impl AppDelegate {
     }
 
     fn reload_page(&self) {
-        let Some(pane) = self.active() else {
+        self.reload_in(self.ivars().mode.get());
+    }
+
+    fn reload_in(&self, mode: Mode) {
+        let Some(pane) = self.pane(mode) else {
             return;
         };
-        if pane.loaded.get() {
-            unsafe { pane.web.reload() };
+        pane.failed.set(false);
+        pane.stopped.set(false);
+        pane.reload_when_shown.set(false);
+        // WebKit reloads the current page, also after a failed load or an ended web process.
+        if unsafe { pane.web.reload() }.is_some() {
+            self.show_active_pane();
             return;
         }
-        // First load failed or the web process ended: request the page again.
-        pane.failed.set(false);
-        let url = self
-            .current_url()
+        // Nothing loaded yet: request the page again.
+        let url = unsafe { pane.web.URL() }
+            .and_then(|url| url.absoluteString())
             .map(|url| url.to_string())
             .or_else(|| pane.last_requested.borrow().clone())
-            .unwrap_or_else(|| self.ivars().mode.get().home().to_owned());
-        self.load_in(self.ivars().mode.get(), &url);
+            .unwrap_or_else(|| mode.home().to_owned());
+        self.load_in(mode, &url);
+    }
+
+    /// WebKit ended a page's web process: it crashed, or macOS reclaimed its memory. Like Safari,
+    /// the page reloads on its own (a section in the background when it is next shown). If it
+    /// ends again within a minute, the section shows a Try Again state instead of reloading in a
+    /// loop.
+    fn on_web_process_ended(&self, web: &WKWebView) {
+        let Some(mode) = self.mode_of(web) else {
+            return;
+        };
+        if self.ivars().fullscreen_mode.get() == Some(mode) {
+            self.exit_video_fullscreen(false);
+        }
+        let Some(pane) = self.pane(mode) else {
+            return;
+        };
+        pane.loaded.set(false);
+        pane.pip_active.set(false);
+        let now = Instant::now();
+        let repeated = pane
+            .ended_at
+            .replace(Some(now))
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(60));
+        if repeated {
+            pane.failed.set(true);
+            pane.stopped.set(true);
+            pane.reload_when_shown.set(false);
+        } else if self.is_active(web) {
+            self.reload_in(mode);
+        } else {
+            pane.reload_when_shown.set(true);
+        }
+        self.show_active_pane();
     }
 
     fn on_load_error(&self, web: &WKWebView, error: &NSError) {
@@ -2326,10 +2447,33 @@ impl AppDelegate {
         ivars.fullscreen_id.set(id);
         // Snapshot the page first: it stands in for the web view in the main window while on stage.
         let this = self.retain();
-        let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
-            this.prepare_stage(mode, rect, id, unsafe { image.as_ref() });
+        let bounds = web.bounds();
+        self.snapshot(web, bounds, bounds.size.width, move |image| {
+            this.prepare_stage(mode, rect, id, image);
         });
-        unsafe { web.takeSnapshotWithConfiguration_completionHandler(None, &block) };
+    }
+
+    /// Snapshots `rect` of the web view for display `shown_width` points wide, at standard
+    /// (not Retina) resolution. WebKit paints snapshots in the page's process, which then stalls
+    /// YouTube; at Retina resolution that took 0.5 s with a 60 fps video, at standard ~0.1 s.
+    /// The images only stand in for a moment while full screen begins or ends.
+    fn snapshot(
+        &self,
+        web: &WKWebView,
+        rect: NSRect,
+        shown_width: f64,
+        then: impl Fn(Option<&NSImage>) + 'static,
+    ) {
+        let scale = web.window().map_or(1., |window| window.backingScaleFactor());
+        let config = unsafe { WKSnapshotConfiguration::new(self.mtm()) };
+        unsafe {
+            config.setRect(rect);
+            config.setSnapshotWidth(Some(&NSNumber::new_f64(shown_width / scale)));
+        }
+        let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+            then(unsafe { image.as_ref() });
+        });
+        unsafe { web.takeSnapshotWithConfiguration_completionHandler(Some(&config), &block) };
     }
 
     fn prepare_stage(&self, mode: Mode, rect: PageRect, id: u64, image: Option<&NSImage>) {
@@ -2362,6 +2506,11 @@ impl AppDelegate {
             ),
             on_screen.size,
         ));
+        ivars
+            .stage_player
+            .set(pane.web.convertRect_toView(player, Some(container)));
+        stage.frame.removeFromSuperview();
+        stage.frame.setImage(None);
         // The snapshot stands in for the page in the main window while the web view is on stage.
         stage.snapshot.setImage(image);
         stage.snapshot.setFrame(container.bounds());
@@ -2444,10 +2593,48 @@ impl AppDelegate {
         let this = self.retain();
         let done = RcBlock::new(move || {
             if this.ivars().zoom_generation.get() == generation {
-                this.finish_stage(mode);
+                this.finish_after_zoom_out(mode, generation);
             }
         });
         stage.zoom(start, zoom_in, from, (!zoom_in).then_some(&*done));
+    }
+
+    /// Zoomed back out: captures the video's current frame for the main window, then leaves the
+    /// stage. Without it, the page snapshot would show the frame from when full screen began
+    /// until the page has laid out again.
+    fn finish_after_zoom_out(&self, mode: Mode, generation: u64) {
+        let Some(pane) = self.pane(mode) else {
+            return;
+        };
+        // The video is letterboxed or pillarboxed to the player's aspect ratio on the stage.
+        let size = pane.web.bounds().size;
+        let player = self.ivars().stage_player.get().size;
+        let aspect = player.width / player.height.max(1.);
+        let video = if size.width / size.height.max(1.) > aspect {
+            let width = size.height * aspect;
+            NSRect::new(
+                NSPoint::new((size.width - width) / 2., 0.),
+                NSSize::new(width, size.height),
+            )
+        } else {
+            let height = size.width / aspect;
+            NSRect::new(
+                NSPoint::new(0., (size.height - height) / 2.),
+                NSSize::new(size.width, height),
+            )
+        };
+        let this = self.retain();
+        self.snapshot(&pane.web, video, player.width, move |image| {
+            let ivars = this.ivars();
+            // A quick toggle turned the zoom around, or the stage already closed.
+            if ivars.zoom_generation.get() != generation {
+                return;
+            }
+            if let Some(stage) = ivars.stage.get() {
+                stage.frame.setImage(image);
+            }
+            this.finish_stage(mode);
+        });
     }
 
     /// Leaves video fullscreen, zooming the video back into the page when `animated`.
@@ -2508,6 +2695,14 @@ impl AppDelegate {
             NSWindowOrderingMode::Below,
             Some(&stage.snapshot),
         );
+        if stage.frame.image().is_some() {
+            stage.frame.setFrame(ivars.stage_player.get());
+            container.addSubview_positioned_relativeTo(
+                &stage.frame,
+                NSWindowOrderingMode::Above,
+                Some(&stage.snapshot),
+            );
+        }
         stage.window.orderOut(None);
         stage.reset_zoom();
         if let Some(options) = ivars.saved_presentation.take() {
@@ -2525,6 +2720,8 @@ impl AppDelegate {
             {
                 stage.snapshot.removeFromSuperview();
                 stage.snapshot.setImage(None);
+                stage.frame.removeFromSuperview();
+                stage.frame.setImage(None);
             }
         });
     }
@@ -2589,11 +2786,14 @@ impl AppDelegate {
             let snapshot = NSImageView::new(mtm);
             snapshot.setImageScaling(NSImageScaling::ScaleAxesIndependently);
             snapshot.setAutoresizingMask(sizable);
+            let frame = NSImageView::new(mtm);
+            frame.setImageScaling(NSImageScaling::ScaleAxesIndependently);
             Stage {
                 window,
                 backdrop,
                 host,
                 snapshot,
+                frame,
             }
         })
     }
@@ -2655,16 +2855,17 @@ impl AppDelegate {
 
 fn toolbar_identifiers() -> Retained<NSArray<NSString>> {
     let custom = [
-        BACK_ID, FORWARD_ID, MODE_ID, SEARCH_ID, PIP_ID, SAVE_ID, ACCOUNT_ID,
+        BACK_ID, FORWARD_ID, HOME_ID, MODE_ID, SEARCH_ID, PIP_ID, SAVE_ID, ACCOUNT_ID,
     ]
     .map(ns);
-    let [back, forward, mode, search, pip, save, account] = &custom;
-    let ids: [&NSString; 11] = unsafe {
+    let [back, forward, home, mode, search, pip, save, account] = &custom;
+    let ids: [&NSString; 12] = unsafe {
         [
             NSToolbarToggleSidebarItemIdentifier,
             NSToolbarSidebarTrackingSeparatorItemIdentifier,
             back,
             forward,
+            home,
             NSToolbarFlexibleSpaceItemIdentifier,
             mode,
             NSToolbarFlexibleSpaceItemIdentifier,

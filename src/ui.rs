@@ -137,9 +137,10 @@ pub fn header_cell(mtm: MainThreadMarker, title: &str) -> Retained<NSView> {
     text.setTextColor(Some(&NSColor::secondaryLabelColor()));
     cell.addSubview(&text);
     unsafe { cell.setTextField(Some(&text)) };
+    // Source lists don't indent group rows; line the header up with the rows' icons below it.
     activate(&[
         text.leadingAnchor()
-            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 4.),
+            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 14.),
         text.trailingAnchor()
             .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.),
         text.centerYAnchor()
@@ -186,7 +187,6 @@ impl Placeholder {
         spinner.setControlSize(NSControlSize::Regular);
         spinner.setDisplayedWhenStopped(false);
         let icon = NSImageView::new(mtm);
-        icon.setImage(symbol("wifi.exclamationmark", "Connection problem").as_deref());
         let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(34., unsafe {
             NSFontWeightRegular
         });
@@ -244,9 +244,10 @@ impl Placeholder {
         self.root.setHidden(false);
     }
 
-    pub fn show_failure(&self, title: &str, detail: &str) {
+    pub fn show_failure(&self, symbol_name: &str, title: &str, detail: &str) {
         unsafe { self.spinner.stopAnimation(None) };
         self.spinner.setHidden(true);
+        self.icon.setImage(symbol(symbol_name, title).as_deref());
         self.title.setStringValue(&ns(title));
         self.detail.setStringValue(&ns(detail));
         for view in [

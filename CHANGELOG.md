@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added a Home button next to Back/Forward and View → Home (⇧⌘H). The three now sit together at the leading edge of the toolbar, like Finder and Safari.
+- The toolbar no longer repeats the page title, which crowded the controls on video pages. The window title (Window menu, Mission Control) and saved Up Next titles drop YouTube's unread-notification count, such as `(1) `.
+- The strip behind the toolbar takes the page's own background color, so the toolbar no longer sits on a gray band above YouTube's dark page.
+- The search field clears a previous query when you leave the results page.
+- Aligned the Up Next sidebar heading with the rows below it.
+- Pressing F starts the full-screen zoom in about 0.3 s instead of 0.7 s: the page snapshot that stands in for the page is now taken at standard resolution, which WebKit paints about five times faster with a 60 fps video playing.
+- Leaving full screen no longer flashes the video back to the frame from when full screen began while the page lays out again; the current frame stays in place instead.
+- When a page's web process crashes or macOS reclaims its memory, the page reloads on its own like in Safari instead of showing "Can't Reach YouTube". If it happens again within a minute, the section says a problem repeatedly occurred and offers Try Again.
+
 ## 0.2.1 — 2026-10-24
 
 - Fixed F making the whole page full screen instead of the video: YouTube requests full screen on the page and only reacts when `onfullscreenchange` exists, which disabling WebKit's own full screen had removed.
