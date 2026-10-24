@@ -1,52 +1,42 @@
 # DooTube — resume checkpoint
 
-Saved 2026-10-23 at the user's request to pause work and continue later. This is a file checkpoint, not a Git commit; no `.git` directory was found at the repository root.
+Updated 2026-10-24. Earlier checkpoint (2026-10-23) is in Git history.
 
 ## Confirmed direction
 
 - Simple, native Mac UI (“เรียบแบบ mac”), with advanced tools tucked away.
-- Make YouTube Watch smooth first, then focus on Music depth and customization. Smoothness versus Kaset is a goal, not a measured result.
-- Current app: Rust + AppKit native chrome around the visible official YouTube website in `WKWebView`; no Electron, unofficial extractor, or custom player.
+- Make YouTube Watch smooth first, then focus on Music depth. Smoothness versus Kaset is a goal, not a measured result.
+- Rust + AppKit native chrome around the official YouTube and YouTube Music websites in `WKWebView`; no Electron, unofficial extractor, or custom player.
 
-## Implemented today
+## Where things are
 
-- Native window: unified toolbar (sidebar toggle, Back/Forward, YouTube | Music switch, search, Picture in Picture, Save to Up Next, account menu) and source-list sidebar with per-section destinations and titled Up Next. The sites' own headers/guides are hidden by injected CSS; players are untouched. Browser handoff and native menus/shortcuts.
-- YouTube and YouTube Music are separate web views (official websites); one plays at a time. In-app Google sign-in via Google's own page, shared by both. Element full screen and Picture in Picture enabled.
-- Up Next with saved URLs and titles, click to open, context-menu/menu Move Up/Down and Remove. No auto-next or restored playback/autoplay.
-- Queue persistence at `~/Library/Application Support/DooTube/state.json`; unreadable state/save errors are surfaced. Do not overwrite the user's saved queue during testing.
-- YouTube-host navigation restrictions (plus Google sign-in hosts) and pause/suspend lifecycle guards, except for Picture in Picture. Implementation is not proof of user-driven playback/lifecycle behavior.
-- Native Music catalog, lyrics, credits, and EQ are **not implemented**; YouTube Music is its official website. Earlier design documents are proposals, not shipped-feature claims.
+- Released: 0.2.2 (see [CHANGELOG.md](CHANGELOG.md)). Video full screen on F, Home button, toolbar on the page's background, web-process crash reload.
+- Unreleased on `main` / `claude/check-latest-work-67m5zl`:
+  - Now Playing card for YouTube Music in the sidebar and a Controls menu (⌘P, ⌘→, ⌘←).
+  - Up Next thumbnails and drag-to-reorder (drag out gives the video link).
+  - Saved videos resume where they were left (`t=` on open; position reported by the page script).
+  - Dock menu with Music track and controls.
+- Shipped behavior and data boundaries: [docs/implementation.md](docs/implementation.md). Recorded test evidence: [docs/verification.md](docs/verification.md).
 
-## Build/run and current app
+## Not yet verified on a Mac
 
-- Build/package: `./scripts/build-app.sh` or `./scripts/build-app.sh --release`.
-- Build and launch: `./scripts/run.sh` or `./scripts/run.sh --release`; startup input follows `--`.
-- Existing optimized bundle: `target/release/DooTube.app` (host-architecture, ad-hoc signed local development app, not notarized).
-- The app was launched at the last request. Leave it running for this pause: do not quit, kill, rebuild, change account/global settings, or alter permissions. This checkpoint does not independently assert live process status. Launch Services reuses the running app; startup arguments do not replace its current page.
+The unreleased items above were written in a Linux session: `cargo check`/`clippy --tests` for `aarch64-apple-darwin` pass with no warnings, and the `core.rs` tests pass (copied into a standalone crate, since the app crate only builds on macOS). Nothing has been built into an app, launched, or looked at. Check on a Mac:
 
-## Saved verification — not rerun for this checkpoint
+1. `cargo test`, then `./scripts/run.sh`.
+2. Up Next: thumbnails appear, row height looks right, dragging reorders and survives relaunch, dragging into Safari opens the link.
+3. Resume: save a video, watch past 0:10, go elsewhere, open it from Up Next — it should start near where you left. Check that an ad doesn't overwrite the position.
+4. Dock menu: right-click the Dock icon while Music plays; Play/Pause, Next, Previous work (also while the window is minimized — WebKit playback is suspended then, so they may not).
+5. Media keys / Control Center next and previous for Music (never tested).
 
-Source of results and exact evidence: [docs/verification.md](docs/verification.md).
+Still unverified from earlier: real playback progression and audio, seeking, smoothness versus Kaset, network recovery.
 
-- Five behavioral/core tests reported passing: URL parsing/boundaries, bounded queue operations, isolated persistence round-trip, and malformed saved-state preservation.
-- Frozen optimized release built without warnings; strict codesign verification passed. Packaging recorded a macOS 14.2 minimum, not runtime compatibility testing on 14.2.
-- Actual native launch/page-render smoke observed official YouTube search and a video page/player. The player was paused at `0:00 / 0:19`; release screenshots retained loading/skeleton chrome, so do not describe them as fully settled-page or playback evidence.
-- In-process geometry/queue smoke checked resize, queue persistence/reorder/remove, webview identity, and lifecycle guards. It is not real keyboard/mouse interaction or media proof.
-- **Still unverified:** actual video progression, audio, seeking, smoothness versus Kaset, native user-driven controls, network recovery, and lifecycle behavior while media plays. Prior task-scoped live UI control returned `{ active: false, reason: "no-ui" }`; no bypass was used. Page rendering is not playback.
+## Possible next steps
 
-## Resume order
+- Optional auto-play of the next Up Next item (off by default, in a Settings window).
+- Menu bar mini player for Music.
+- Now Playing card for a YouTube video while the Music section is shown.
 
-1. Obtain permitted live control with an explicit interactive grant, or have the user perform a genuine playback gesture. Respect provider restrictions; do not bypass denied input or sign-in requirements.
-2. Verify and record real playback progression, audible audio, seeking, and media lifecycle/native controls. Inspect any observed loading/status/rendering or interaction issues and fix demonstrated problems.
-3. Measure Watch smoothness against Kaset on the same hardware, network, media, and access conditions, including WebKit helper costs. Do not claim a performance win before measurement.
-4. Only after proving the Watch daily core, move the delivery focus to Music; lyrics/credits/EQ need feasibility and permitted implementation, not placeholder controls.
+## Build and run
 
-## Read next
-
-- [README.md](README.md): usage and build commands.
-- [docs/implementation.md](docs/implementation.md): shipped behavior and data boundaries.
-- [.impeccable.md](.impeccable.md): confirmed design direction.
-- [docs/design-brief.md](docs/design-brief.md) and [docs/architecture.md](docs/architecture.md): design history/future options.
-- `src/main.rs`: native app; `src/core.rs`: input/queue/persistence logic.
-
-No feature code, existing design documents, or user state were changed for this checkpoint. No build, tests, codesign, playback checks, or Git commit were run.
+- `./scripts/build-app.sh [--release]`, `./scripts/run.sh [--release]`, `./scripts/install.sh --open`, `./scripts/make-dmg.sh`.
+- Saved queue: `~/Library/Application Support/DooTube/state.json`. Don't overwrite the user's saved queue during testing.

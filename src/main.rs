@@ -7,7 +7,7 @@ mod web;
 use block2::RcBlock;
 use core::{
     AppState, Navigation, clean_page_title, is_google_sign_in_url, is_music_url,
-    is_supported_youtube_url, load_state, parse_input, save_state, video_id,
+    is_supported_youtube_url, load_state, parse_input, resume_point, save_state, video_id,
 };
 use dispatch2::DispatchQueue;
 use objc2::{
@@ -360,6 +360,10 @@ define_class!(
             self.on_window_reopen();
             true
         }
+        #[unsafe(method_id(applicationDockMenu:))]
+        fn dock_menu(&self, _app: &NSApplication) -> Option<Retained<NSMenu>> {
+            self.music_dock_menu()
+        }
         #[unsafe(method(applicationDidHide:))]
         fn did_hide(&self, _notification: &NSNotification) {
             self.on_application_hide();
@@ -504,6 +508,11 @@ define_class!(
                         load_image(url, AppDelegate::on_account_photo);
                     }
                 }
+                Some(PageMessage::Progress { url, seconds, duration })
+                    if self.mode_of(&web) == Some(Mode::YouTube) && is_youtube_main_frame(message) =>
+                {
+                    self.on_video_progress(&url, seconds, duration);
+                }
                 Some(PageMessage::NowPlaying(track))
                     if self.mode_of(&web) == Some(Mode::Music) && is_music_main_frame(message) =>
                 {
@@ -512,6 +521,7 @@ define_class!(
                 Some(PageMessage::AccountIdentity { .. })
                 | Some(PageMessage::Fullscreen { .. })
                 | Some(PageMessage::NowPlaying(_))
+                | Some(PageMessage::Progress { .. })
                 | None => {}
             }
         }
@@ -1608,6 +1618,38 @@ impl AppDelegate {
         );
     }
 
+    /// The Dock icon's menu: what YouTube Music is on, with its controls. `None` (only the
+    /// standard Dock items) until Music has a track.
+    fn music_dock_menu(&self) -> Option<Retained<NSMenu>> {
+        let mtm = self.mtm();
+        let track = self.ivars().track.borrow();
+        if track.title.is_empty() {
+            return None;
+        }
+        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("DooTube"));
+        // Dock menus don't validate their items, so titles and states are set here.
+        menu.setAutoenablesItems(false);
+        let heading = if track.artist.is_empty() {
+            track.title.clone()
+        } else {
+            format!("{} – {}", track.title, track.artist)
+        };
+        let now_playing = ui::menu_item(mtm, &heading, None, "", None);
+        now_playing.setEnabled(false);
+        menu.addItem(&now_playing);
+        for (title, action) in [
+            (
+                if track.playing { "Pause" } else { "Play" },
+                sel!(musicPlayPause:),
+            ),
+            ("Next", sel!(musicNext:)),
+            ("Previous", sel!(musicPrevious:)),
+        ] {
+            menu.addItem(&ui::menu_item(mtm, title, Some(action), "", Some(self)));
+        }
+        Some(menu)
+    }
+
     /// Presses YouTube Music's own player-bar button; the Music section keeps its page and
     /// player while the YouTube section is shown.
     fn music_control(&self, action: &str) {
@@ -1877,7 +1919,8 @@ impl AppDelegate {
                 self.ivars().mode.get().destinations()[index].url.to_owned()
             }
             Some(Row::Saved(index)) => {
-                match self.with_state(|state| state.up_next.get(index).map(|item| item.url.clone()))
+                match self
+                    .with_state(|state| state.up_next.get(index).map(|item| item.resume_url()))
                 {
                     Some(Some(url)) => url,
                     _ => return,
@@ -2060,6 +2103,23 @@ impl AppDelegate {
         drop(stored);
         self.reload_sidebar();
         true
+    }
+
+    /// Remembers where a saved video was left. Saved quietly: no sidebar reload (it would
+    /// interrupt a drag) and no notice for a failed write, since this repeats while a video plays.
+    fn on_video_progress(&self, url: &str, seconds: f64, duration: f64) {
+        let Ok(Navigation::Video(url)) = parse_input(url) else {
+            return;
+        };
+        let position = resume_point(seconds, duration);
+        let mut stored = self.ivars().queue.borrow_mut();
+        let Ok(state) = stored.as_mut() else {
+            return;
+        };
+        let mut candidate = state.clone();
+        if candidate.set_position(&url, position) && save_state(&candidate).is_ok() {
+            *state = candidate;
+        }
     }
 
     /// `Some(saved?)` when the page is a video; `None` otherwise or when the queue is unreadable.
