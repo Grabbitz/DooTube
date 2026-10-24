@@ -11,7 +11,7 @@ Updated 2026-10-24. Earlier checkpoint (2026-10-23) is in Git history.
 ## Where things are
 
 - Released: 0.2.2 (see [CHANGELOG.md](CHANGELOG.md)). Video full screen on F, Home button, toolbar on the page's background, web-process crash reload.
-- Unreleased (Now Playing and Controls are on `main`; the rest is on branch `claude/check-latest-work-67m5zl`, not merged yet):
+- Unreleased, all on `main` (PR #1 merged):
   - Now Playing card for YouTube Music in the sidebar and a Controls menu (⌘P, ⌘→, ⌘←).
   - Up Next thumbnails and drag-to-reorder (drag out gives the video link).
   - Saved videos resume where they were left (`t=` on open; position reported by the page script).
@@ -20,13 +20,12 @@ Updated 2026-10-24. Earlier checkpoint (2026-10-23) is in Git history.
 
 ## Not yet verified on a Mac
 
-The unreleased items above were written in a Linux session: `cargo check`/`clippy --tests` for `aarch64-apple-darwin` pass with no warnings, and the `core.rs` tests pass (copied into a standalone crate, since the app crate only builds on macOS). Nothing has been built into an app, launched, or looked at. Check on a Mac:
+The unreleased items above were written in a Linux session: `cargo check`/`clippy --tests` for `aarch64-apple-darwin` pass with no warnings, and the `core.rs` tests pass (copied into a standalone crate, since the app crate only builds on macOS). On a Mac (2026-10-24): `cargo test` (19 pass) and `cargo clippy --all-targets` are clean, and `./scripts/run.sh` builds, signs, and launches the app to YouTube Home. The features themselves have not been tried yet. Check:
 
-1. `cargo test`, then `./scripts/run.sh`.
-2. Up Next: thumbnails appear, row height looks right, dragging reorders and survives relaunch, dragging into Safari opens the link.
-3. Resume: save a video, watch past 0:10, go elsewhere, open it from Up Next — it should start near where you left. Check that an ad doesn't overwrite the position.
-4. Dock menu: right-click the Dock icon while Music plays; Play/Pause, Next, Previous work (also while the window is minimized — WebKit playback is suspended then, so they may not).
-5. Media keys / Control Center next and previous for Music (never tested).
+1. Up Next: thumbnails appear, row height looks right, dragging reorders and survives relaunch, dragging into Safari opens the link.
+2. Resume: save a video, watch past 0:10, go elsewhere, open it from Up Next — it should start near where you left. Check that an ad doesn't overwrite the position.
+3. Dock menu: right-click the Dock icon while Music plays; Play/Pause, Next, Previous work (also while the window is minimized — WebKit playback is suspended then, so they may not).
+4. Media keys / Control Center next and previous for Music (never tested).
 
 Still unverified from earlier: real playback progression and audio, seeking, smoothness versus Kaset, network recovery.
 
