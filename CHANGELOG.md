@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fixed F making the whole page full screen instead of the video: YouTube requests full screen on the page and only reacts when `onfullscreenchange` exists, which disabling WebKit's own full screen had removed.
+- Pressing F repeatedly now reverses the zoom from wherever it is instead of dropping presses or jumping.
+
 ## 0.2.0 — 2026-10-24
 
 - Video full screen (F or the player's button) now fills the screen with only the video instead of putting the app window in full screen, zooming smoothly out of and back into the page.

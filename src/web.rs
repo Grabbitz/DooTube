@@ -208,10 +208,13 @@ pub enum PageMessage {
         title: String,
     },
     /// The page requested (with the element's viewport rect) or exited video fullscreen.
+    /// `id` names the request; a later request gets a new one.
     Fullscreen {
         active: bool,
         #[serde(default)]
         rect: Option<PageRect>,
+        #[serde(default)]
+        id: u64,
     },
     /// A video entered or left Picture in Picture.
     Pip { active: bool },
@@ -422,9 +425,9 @@ pub fn page_script() -> String {
 /// Keep page fullscreen events in the main app window instead of asking WebKit to create its
 /// separate element-fullscreen window.
 fn fullscreen_shim_script() -> String {
-    r#"(() => {
+    r##"(() => {
   if (!["www.youtube.com", "youtube.com", "m.youtube.com", "music.youtube.com"].includes(location.hostname)) return;
-  const post = (active, rect) => window.webkit.messageHandlers.__DOOTUBE_HANDLER__.postMessage(JSON.stringify({ type: "fullscreen", active, rect }));
+  const post = (active, rect) => window.webkit.messageHandlers.__DOOTUBE_HANDLER__.postMessage(JSON.stringify({ type: "fullscreen", active, rect, id: session }));
   const style = document.createElement("style");
   style.textContent = `
     .dootube-fullscreen-element {
@@ -437,13 +440,6 @@ fn fullscreen_shim_script() -> String {
       z-index: 2147483647 !important;
       background: #000 !important;
     }
-    .dootube-fullscreen-element video {
-      left: 0 !important;
-      top: 0 !important;
-      width: 100% !important;
-      height: 100% !important;
-      object-fit: contain !important;
-    }
     :root.dootube-fullscreen, :root.dootube-fullscreen body {
       overflow: hidden !important;
       scrollbar-width: none !important;
@@ -453,6 +449,8 @@ fn fullscreen_shim_script() -> String {
   `;
   document.documentElement.appendChild(style);
   let activeElement = null;
+  // Each request is a session; the app tags its replies with it so late ones are ignored.
+  let session = 0;
   let pending = null;
   let exiting = null;
   const dispatch = (target, name) => {
@@ -469,18 +467,24 @@ fn fullscreen_shim_script() -> String {
   const enter = (element) => {
     if (!(element instanceof Element)) return Promise.reject(new TypeError("Fullscreen target must be an Element"));
     if (activeElement || pending || exiting) return Promise.resolve();
-    const r = element.getBoundingClientRect();
+    // YouTube requests fullscreen on <html>; the zoom starts from the player inside it.
+    const page = element === document.documentElement || element === document.body || element.localName === "ytd-app";
+    const r = ((page && document.querySelector("#movie_player")) || element).getBoundingClientRect();
+    // The page reads as full screen at once, so a quick second toggle becomes an exit that
+    // cancels this request instead of being lost while the app prepares the zoom.
+    activeElement = element;
+    session += 1;
     return new Promise((resolve) => {
-      pending = { element, resolve };
+      pending = { element, resolve, id: session };
       post(true, { x: r.left, y: r.top, width: r.width, height: r.height });
     });
   };
-  window.__dootubeApplyFullscreen = (ok) => {
+  window.__dootubeApplyFullscreen = (ok, id) => {
     const request = pending;
+    if (!request || request.id !== id) return;
     pending = null;
-    if (!request) return;
-    if (ok) {
-      activeElement = request.element;
+    if (!ok && activeElement === request.element) activeElement = null;
+    if (ok && activeElement === request.element) {
       activeElement.classList.add("dootube-fullscreen-element");
       activeElement.setAttribute("data-dootube-fullscreen", "");
       document.documentElement.classList.add("dootube-fullscreen");
@@ -492,15 +496,23 @@ fn fullscreen_shim_script() -> String {
   // The app zooms back first, then calls __dootubeExitFullscreen to restore the page.
   const exit = () => {
     if (!activeElement) return Promise.resolve();
-    if (!exiting) {
-      let resolve;
-      const promise = new Promise((r) => { resolve = r; });
-      exiting = { promise, resolve };
+    // Toggled off before the zoom began: drop the request; the app stops preparing.
+    if (pending) {
+      pending.resolve();
+      pending = null;
+      activeElement = null;
       post(false);
+      return Promise.resolve();
     }
-    return exiting.promise;
+    if (exiting) return exiting.promise;
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    exiting = { promise, resolve };
+    post(false);
+    return promise;
   };
-  window.__dootubeExitFullscreen = () => {
+  window.__dootubeExitFullscreen = (id) => {
+    if (id !== session) return;
     const done = exiting;
     exiting = null;
     const element = activeElement;
@@ -525,12 +537,57 @@ fn fullscreen_shim_script() -> String {
   for (const key of ["fullscreenElement", "webkitFullscreenElement", "webkitCurrentFullScreenElement"]) {
     Object.defineProperty(docProto, key, { configurable: true, get: () => activeElement });
   }
+  // With WebKit's own fullscreen disabled these handler properties are gone, and YouTube only
+  // listens for fullscreenchange when `"onfullscreenchange" in document`.
+  for (const proto of [docProto, elementProto]) {
+    for (const name of ["onfullscreenchange", "onwebkitfullscreenchange", "onfullscreenerror", "onwebkitfullscreenerror"]) {
+      if (name in proto) continue;
+      const handlers = new WeakMap();
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        get() { return handlers.get(this) || null; },
+        set(handler) {
+          const old = handlers.get(this);
+          if (old) this.removeEventListener(name.slice(2), old);
+          if (typeof handler === "function") {
+            handlers.set(this, handler);
+            this.addEventListener(name.slice(2), handler);
+          } else {
+            handlers.delete(this);
+          }
+        },
+      });
+    }
+  }
   for (const key of ["webkitIsFullScreen"]) {
     Object.defineProperty(docProto, key, { configurable: true, get: () => activeElement !== null });
   }
   for (const key of ["fullscreenEnabled", "webkitFullscreenEnabled"]) {
     Object.defineProperty(docProto, key, { configurable: true, get: () => true });
   }
+  // F toggles from DooTube's own state rather than YouTube's, which only catches up after the
+  // zoom, so quick repeated presses reverse the zoom instead of being dropped.
+  const toggle = () => {
+    if (exiting) {
+      exiting.resolve();
+      exiting = null;
+      post(true);
+    } else if (activeElement) {
+      exit();
+    } else {
+      enter(document.documentElement);
+    }
+  };
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "f" && event.key !== "F") return;
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    const target = event.composedPath()[0];
+    if (target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
+    if (!document.querySelector("#movie_player video")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    toggle();
+  }, true);
   document.addEventListener("keydown", (event) => {
     if (!activeElement || (event.key !== "Escape" && event.key !== "Esc")) return;
     setTimeout(() => {
@@ -540,7 +597,7 @@ fn fullscreen_shim_script() -> String {
       if (!menu) exit();
     }, 0);
   }, true);
-})();"#
+})();"##
         .replace("__DOOTUBE_HANDLER__", MESSAGE_HANDLER)
 }
 
@@ -602,7 +659,7 @@ mod tests {
         ));
         assert!(matches!(
             parse(
-                r#"{"type":"fullscreen","active":true,"rect":{"x":24,"y":80.5,"width":854,"height":480}}"#
+                r#"{"type":"fullscreen","active":true,"rect":{"x":24,"y":80.5,"width":854,"height":480},"id":3}"#
             ),
             PageMessage::Fullscreen {
                 active: true,
@@ -611,14 +668,16 @@ mod tests {
                     y: 80.5,
                     width: 854.,
                     height: 480.
-                })
+                }),
+                id: 3
             }
         ));
         assert!(matches!(
             parse(r#"{"type":"fullscreen","active":false}"#),
             PageMessage::Fullscreen {
                 active: false,
-                rect: None
+                rect: None,
+                id: 0
             }
         ));
         assert!(

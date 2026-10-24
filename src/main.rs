@@ -39,6 +39,7 @@ use objc2_foundation::{
 use objc2_quartz_core::{
     CABasicAnimation, CAMediaTiming, CAMediaTimingFunction, CATransaction, CATransform3D,
     CATransform3DIdentity, NSValueCATransform3DAdditions, kCAMediaTimingFunctionEaseInEaseOut,
+    kCAMediaTimingFunctionEaseOut,
 };
 use objc2_web_kit::{
     WKAudiovisualMediaTypes, WKContentWorld, WKHTTPCookieStore, WKHTTPCookieStoreObserver,
@@ -98,10 +99,12 @@ fn is_video_fullscreen_main_frame(message: &WKScriptMessage) -> bool {
         })
 }
 
-const EXIT_FULLSCREEN_JS: &str =
-    "window.__dootubeExitFullscreen && window.__dootubeExitFullscreen()";
-const REFUSE_FULLSCREEN_JS: &str =
-    "window.__dootubeApplyFullscreen && window.__dootubeApplyFullscreen(false)";
+fn exit_fullscreen_js(id: u64) -> String {
+    format!("window.__dootubeExitFullscreen && window.__dootubeExitFullscreen({id})")
+}
+fn apply_fullscreen_js(ok: bool, id: u64) -> String {
+    format!("window.__dootubeApplyFullscreen && window.__dootubeApplyFullscreen({ok}, {id})")
+}
 
 fn run_js(web: &WKWebView, script: &str) {
     unsafe { web.evaluateJavaScript_completionHandler(&ns(script), None) };
@@ -130,6 +133,10 @@ struct AppIvars {
     /// The web view has moved onto the stage window.
     stage_shown: Cell<bool>,
     stage_leaving: Cell<bool>,
+    /// The page's id for the current full-screen request; replies carry it.
+    fullscreen_id: Cell<u64>,
+    /// Bumped by every zoom, so an interrupted zoom-out's completion doesn't end full screen.
+    zoom_generation: Cell<u64>,
     /// Where the video sat on the page, in stage coordinates; the zoom starts and ends here.
     stage_start: Cell<NSRect>,
     /// Presentation options to restore; set only when the stage hid the Dock and menu bar.
@@ -223,12 +230,15 @@ impl Stage {
         transform
     }
 
-    /// Animates the host's transform and the backdrop's opacity on the GPU, then runs `done`.
+    /// Zooms the video in (to full screen) or out (to `start`, the player's rect) on the GPU,
+    /// fading the backdrop with it, then runs `done`. Without `from` it continues from wherever an
+    /// interrupted zoom is now, taking only the remaining share of the duration, so quick repeated
+    /// toggles reverse smoothly.
     fn zoom(
         &self,
-        from: CATransform3D,
-        to: CATransform3D,
-        backdrop_to: f64,
+        start: CATransform3D,
+        zoom_in: bool,
+        from: Option<CATransform3D>,
         done: Option<&block2::DynBlock<dyn Fn()>>,
     ) {
         let (Some(host), Some(backdrop)) = (self.host.layer(), self.backdrop.layer()) else {
@@ -237,8 +247,35 @@ impl Stage {
             }
             return;
         };
-        let curve =
-            CAMediaTimingFunction::functionWithName(unsafe { kCAMediaTimingFunctionEaseInEaseOut });
+        let identity = unsafe { CATransform3DIdentity };
+        let (to, backdrop_to) = if zoom_in { (identity, 1.) } else { (start, 0.) };
+        let current = from.unwrap_or_else(|| {
+            unsafe { host.presentationLayer() }
+                .map_or_else(|| host.transform(), |layer| layer.transform())
+        });
+        let current_opacity = if from.is_some() {
+            1. - backdrop_to
+        } else {
+            unsafe { backdrop.presentationLayer() }
+                .map_or_else(|| backdrop.opacity(), |layer| layer.opacity()) as f64
+        };
+        // 0 = at the player's rect, 1 = full screen.
+        let span = 1. - start.m11;
+        let progress = if span.abs() < 1e-6 {
+            1.
+        } else {
+            ((current.m11 - start.m11) / span).clamp(0., 1.)
+        };
+        let remaining = if zoom_in { 1. - progress } else { progress };
+        let duration = (STAGE_ZOOM_SECONDS * remaining).max(0.06);
+        // A fresh zoom eases in and out; a reversal is already moving, so it only eases out.
+        let curve = CAMediaTimingFunction::functionWithName(unsafe {
+            if from.is_some() {
+                kCAMediaTimingFunctionEaseInEaseOut
+            } else {
+                kCAMediaTimingFunctionEaseOut
+            }
+        });
         CATransaction::begin();
         CATransaction::setDisableActions(true);
         unsafe { CATransaction::setCompletionBlock(done) };
@@ -247,19 +284,19 @@ impl Stage {
         backdrop.setOpacity(backdrop_to as f32);
         let zoom = CABasicAnimation::animationWithKeyPath(Some(ns_string!("transform")));
         unsafe {
-            zoom.setFromValue(Some(&NSValue::valueWithCATransform3D(from)));
+            zoom.setFromValue(Some(&NSValue::valueWithCATransform3D(current)));
             zoom.setToValue(Some(&NSValue::valueWithCATransform3D(to)));
         }
         let fade = CABasicAnimation::animationWithKeyPath(Some(ns_string!("opacity")));
         unsafe {
-            fade.setFromValue(Some(&NSNumber::new_f64(1. - backdrop_to)));
+            fade.setFromValue(Some(&NSNumber::new_f64(current_opacity)));
             fade.setToValue(Some(&NSNumber::new_f64(backdrop_to)));
         }
         for (layer, animation, key) in [
             (&host, &zoom, ns_string!("zoom")),
             (&backdrop, &fade, ns_string!("fade")),
         ] {
-            animation.setDuration(STAGE_ZOOM_SECONDS);
+            animation.setDuration(duration);
             animation.setTimingFunction(Some(&curve));
             layer.addAnimation_forKey(animation, Some(key));
         }
@@ -414,10 +451,10 @@ define_class!(
                 .downcast_ref::<NSString>()
                 .and_then(|text| serde_json::from_str::<PageMessage>(&text.to_string()).ok());
             match report {
-                Some(PageMessage::Fullscreen { active, rect })
+                Some(PageMessage::Fullscreen { active, rect, id })
                     if is_video_fullscreen_main_frame(message) =>
                 {
-                    self.on_video_fullscreen_message(&web, active, rect);
+                    self.on_video_fullscreen_message(&web, active, rect, id);
                 }
                 Some(PageMessage::Audible { title }) => self.on_audible_playback(&web, title),
                 Some(PageMessage::PipFailed { reason }) => {
@@ -744,6 +781,8 @@ impl AppDelegate {
             fullscreen_mode: Cell::new(None),
             stage_shown: Cell::new(false),
             stage_leaving: Cell::new(false),
+            fullscreen_id: Cell::new(0),
+            zoom_generation: Cell::new(0),
             stage_start: Cell::new(NSRect::ZERO),
             saved_presentation: Cell::new(None),
             stage: OnceCell::new(),
@@ -2253,43 +2292,55 @@ impl AppDelegate {
     }
 
     /// The page asked to enter (with the player's rect) or leave video fullscreen.
-    fn on_video_fullscreen_message(&self, web: &WKWebView, active: bool, rect: Option<PageRect>) {
+    fn on_video_fullscreen_message(
+        &self,
+        web: &WKWebView,
+        active: bool,
+        rect: Option<PageRect>,
+        id: u64,
+    ) {
         let Some(mode) = self.mode_of(web) else {
             return;
         };
         let ivars = self.ivars();
+        let current = ivars.fullscreen_mode.get() == Some(mode) && ivars.fullscreen_id.get() == id;
         if !active {
-            if ivars.fullscreen_mode.get() == Some(mode) {
+            if current {
                 self.exit_video_fullscreen(true);
             } else {
-                run_js(web, EXIT_FULLSCREEN_JS);
+                run_js(web, &exit_fullscreen_js(id));
             }
             return;
         }
-        let Some(rect) =
-            rect.filter(|_| ivars.mode.get() == mode && ivars.fullscreen_mode.get().is_none())
-        else {
-            run_js(web, REFUSE_FULLSCREEN_JS);
+        if current {
+            self.resume_stage(mode);
+            return;
+        }
+        // A new request replaces any other one still on screen.
+        self.exit_video_fullscreen(false);
+        let Some(rect) = rect.filter(|_| ivars.mode.get() == mode) else {
+            run_js(web, &apply_fullscreen_js(false, id));
             return;
         };
         ivars.fullscreen_mode.set(Some(mode));
+        ivars.fullscreen_id.set(id);
         // Snapshot the page first: it stands in for the web view in the main window while on stage.
         let this = self.retain();
         let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
-            this.prepare_stage(mode, rect, unsafe { image.as_ref() });
+            this.prepare_stage(mode, rect, id, unsafe { image.as_ref() });
         });
         unsafe { web.takeSnapshotWithConfiguration_completionHandler(None, &block) };
     }
 
-    fn prepare_stage(&self, mode: Mode, rect: PageRect, image: Option<&NSImage>) {
+    fn prepare_stage(&self, mode: Mode, rect: PageRect, id: u64, image: Option<&NSImage>) {
         let ivars = self.ivars();
         let (Some(pane), Some(window), Some(container)) =
             (self.pane(mode), ivars.window.get(), ivars.container.get())
         else {
             return;
         };
-        if ivars.fullscreen_mode.get() != Some(mode) {
-            run_js(&pane.web, REFUSE_FULLSCREEN_JS);
+        if ivars.fullscreen_mode.get() != Some(mode) || ivars.fullscreen_id.get() != id {
+            run_js(&pane.web, &apply_fullscreen_js(false, id));
             return;
         }
         let stage = self.stage();
@@ -2341,27 +2392,62 @@ impl AppDelegate {
         let this = self.retain();
         self.run_js_after_paint(
             web,
-            "window.__dootubeApplyFullscreen && window.__dootubeApplyFullscreen(true);",
+            &format!("{};", apply_fullscreen_js(true, id)),
             move || {
-                this.zoom_onto_stage(mode);
+                this.zoom_onto_stage(mode, id);
             },
         );
     }
 
-    fn zoom_onto_stage(&self, mode: Mode) {
+    fn zoom_onto_stage(&self, mode: Mode, id: u64) {
         let ivars = self.ivars();
         let Some(stage) = ivars.stage.get() else {
             return;
         };
         if ivars.fullscreen_mode.get() != Some(mode)
+            || ivars.fullscreen_id.get() != id
             || !ivars.stage_shown.get()
-            || ivars.stage_leaving.get()
         {
+            return;
+        }
+        if ivars.stage_leaving.get() {
+            self.finish_stage(mode);
             return;
         }
         let start = stage.zoom_transform(ivars.stage_start.get());
         stage.host.setAlphaValue(1.);
-        stage.zoom(start, unsafe { CATransform3DIdentity }, 1., None);
+        self.run_zoom(mode, true, Some(start));
+    }
+
+    /// The page asked for full screen again while zooming out: turn around and zoom back in.
+    fn resume_stage(&self, mode: Mode) {
+        let ivars = self.ivars();
+        // Before the zoom-in started, clearing the flag is enough; it starts once painted.
+        if ivars.stage_leaving.replace(false)
+            && ivars
+                .stage
+                .get()
+                .is_some_and(|stage| stage.host.alphaValue() != 0.)
+        {
+            self.run_zoom(mode, true, None);
+        }
+    }
+
+    fn run_zoom(&self, mode: Mode, zoom_in: bool, from: Option<CATransform3D>) {
+        let ivars = self.ivars();
+        let Some(stage) = ivars.stage.get() else {
+            return;
+        };
+        let generation = ivars.zoom_generation.get().wrapping_add(1);
+        ivars.zoom_generation.set(generation);
+        let start = stage.zoom_transform(ivars.stage_start.get());
+        let this = self.retain();
+        let done = RcBlock::new(move || {
+            if this.ivars().zoom_generation.get() == generation {
+                this.finish_stage(mode);
+            }
+        });
+        stage.zoom(start, zoom_in, from, (!zoom_in).then_some(&*done));
     }
 
     /// Leaves video fullscreen, zooming the video back into the page when `animated`.
@@ -2374,7 +2460,7 @@ impl AppDelegate {
             // Still snapshotting; the pending step sees the cleared mode and stops.
             ivars.fullscreen_mode.set(None);
             if let Some(pane) = self.pane(mode) {
-                run_js(&pane.web, EXIT_FULLSCREEN_JS);
+                run_js(&pane.web, &exit_fullscreen_js(ivars.fullscreen_id.get()));
             }
             return;
         }
@@ -2388,11 +2474,11 @@ impl AppDelegate {
         if ivars.stage_leaving.replace(true) {
             return;
         }
-        stage.host.setAlphaValue(1.);
-        let end = stage.zoom_transform(ivars.stage_start.get());
-        let this = self.retain();
-        let done = RcBlock::new(move || this.finish_stage(mode));
-        stage.zoom(unsafe { CATransform3DIdentity }, end, 0., Some(&done));
+        // Not zoomed in yet (the page is still painting its full-screen layout): the pending
+        // zoom-in sees `stage_leaving` and puts it back, unless a quick toggle resumes first.
+        if stage.host.alphaValue() != 0. {
+            self.run_zoom(mode, false, None);
+        }
     }
 
     fn finish_stage(&self, mode: Mode) {
@@ -2400,6 +2486,9 @@ impl AppDelegate {
         if !ivars.stage_shown.replace(false) {
             return;
         }
+        ivars
+            .zoom_generation
+            .set(ivars.zoom_generation.get().wrapping_add(1));
         ivars.stage_leaving.set(false);
         ivars.fullscreen_mode.set(None);
         let (Some(pane), Some(stage), Some(container), Some(window)) = (
@@ -2429,7 +2518,8 @@ impl AppDelegate {
         }
         window.makeFirstResponder(Some(web));
         let this = self.retain();
-        self.run_js_after_paint(web, &format!("{EXIT_FULLSCREEN_JS};"), move || {
+        let exit = format!("{};", exit_fullscreen_js(ivars.fullscreen_id.get()));
+        self.run_js_after_paint(web, &exit, move || {
             if this.ivars().fullscreen_mode.get().is_none()
                 && let Some(stage) = this.ivars().stage.get()
             {
@@ -2439,10 +2529,11 @@ impl AppDelegate {
         });
     }
 
-    /// Runs `script` in the page, then calls `then` once the page has painted the result.
+    /// Runs `script` in the page, then calls `then` once the page has painted the result (or after
+    /// 120 ms, since WebKit may pause animation frames while the stage is still invisible).
     fn run_js_after_paint(&self, web: &WKWebView, script: &str, then: impl Fn() + 'static) {
         let body = format!(
-            "{script}\nawait new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));"
+            "{script}\nawait new Promise((resolve) => {{ requestAnimationFrame(() => requestAnimationFrame(resolve)); setTimeout(resolve, 120); }});"
         );
         let block = RcBlock::new(move |_result: *mut AnyObject, _error: *mut NSError| then());
         unsafe {
