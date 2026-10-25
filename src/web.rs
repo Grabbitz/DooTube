@@ -22,10 +22,9 @@ pub enum Mode {
     Music,
 }
 
-/// A fixed sidebar entry for one section.
+/// A provider-owned browse destination for one section.
 pub struct Destination {
     pub title: &'static str,
-    pub symbol: &'static str,
     pub url: &'static str,
     /// Path prefix that marks this destination as current; `/` matches only the root.
     pub path: &'static str,
@@ -34,25 +33,21 @@ pub struct Destination {
 const YOUTUBE_DESTINATIONS: [Destination; 4] = [
     Destination {
         title: "Home",
-        symbol: "house",
         url: "https://www.youtube.com/",
         path: "/",
     },
     Destination {
         title: "Shorts",
-        symbol: "play.square.stack",
         url: "https://www.youtube.com/shorts",
         path: "/shorts",
     },
     Destination {
         title: "Subscriptions",
-        symbol: "rectangle.stack",
         url: "https://www.youtube.com/feed/subscriptions",
         path: "/feed/subscriptions",
     },
     Destination {
         title: "History",
-        symbol: "clock.arrow.circlepath",
         url: "https://www.youtube.com/feed/history",
         path: "/feed/history",
     },
@@ -61,19 +56,16 @@ const YOUTUBE_DESTINATIONS: [Destination; 4] = [
 const MUSIC_DESTINATIONS: [Destination; 3] = [
     Destination {
         title: "Home",
-        symbol: "house",
         url: "https://music.youtube.com/",
         path: "/",
     },
     Destination {
         title: "Explore",
-        symbol: "safari",
         url: "https://music.youtube.com/explore",
         path: "/explore",
     },
     Destination {
         title: "Library",
-        symbol: "music.note.list",
         url: "https://music.youtube.com/library",
         path: "/library",
     },
@@ -481,7 +473,8 @@ pub fn page_script() -> String {
 }})();"##
     );
     script.push_str(&fullscreen_shim_script());
-    script.push_str(&include_str!("music_player.js").replace("__DOOTUBE_HANDLER__", MESSAGE_HANDLER));
+    script
+        .push_str(&include_str!("music_player.js").replace("__DOOTUBE_HANDLER__", MESSAGE_HANDLER));
     script
 }
 

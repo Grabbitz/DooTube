@@ -235,15 +235,23 @@ impl QueueItem {
     }
     /// YouTube's medium (320×180) thumbnail for the saved video, when its ID looks like one.
     pub fn thumbnail_url(&self) -> Option<String> {
-        self.video_id()
-            .filter(|id| {
-                id.len() <= 32
-                    && id
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-            })
-            .map(|id| format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"))
+        Url::parse(&self.url)
+            .ok()
+            .as_ref()
+            .and_then(video_thumbnail)
     }
+}
+
+/// The same provider-owned thumbnail policy for live pages and saved queue items.
+pub fn video_thumbnail(url: &Url) -> Option<String> {
+    video_id(url)
+        .filter(|id| {
+            id.len() <= 32
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .map(|id| format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"))
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

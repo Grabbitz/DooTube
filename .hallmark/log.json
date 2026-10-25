@@ -1,0 +1,37 @@
+[
+  {
+    "date": "2026-10-25",
+    "macrostructure": "Photographic",
+    "theme": "Midnight Cinema",
+    "theme_axes": "dark / condensed-display / warm",
+    "nav": "N1b",
+    "footer": "none — native application",
+    "enrichment": "current-media imagery and real saved-video shelf",
+    "brief": "Promote the user-approved Netflix-inspired Cinema design into the installed DooTube app",
+    "scope": "production 0.3.0: native CinemaBar, bundled nonpersistent Home, native queue drawer; official players and persisted data retained",
+    "rotation": "User requested integration of the approved design, not another visual rotation."
+  },
+  {
+    "date": "2026-10-25",
+    "macrostructure": "Photographic",
+    "theme": "Midnight Cinema",
+    "theme_axes": "dark / condensed-display / warm",
+    "nav": "N1b",
+    "footer": "Ft1",
+    "enrichment": "real full-bleed media imagery; official player capture on request",
+    "brief": "Creator-requested Netflix-inspired DooTube preview; top navigation, poster typography, media shelf, on-demand queue",
+    "scope": "existing standalone preview, shared shell and two modes; production unchanged",
+    "rotation": "Workbench to Photographic; N13 to N1b; Ft2 to Ft1. Dark/warm palette retained for the requested cinematic direction."
+  },
+  {
+    "date": "2026-10-25",
+    "macrostructure": "Workbench",
+    "theme": "Midnight",
+    "theme_axes": "dark / geometric-sans / warm",
+    "nav": "N13",
+    "footer": "Ft2",
+    "enrichment": "real app media captures, no OS frame",
+    "brief": "DooTube Cinema / Music standalone Watch and Music concept; production unchanged",
+    "scope": "one shared app-shell preview, two modes"
+  }
+]

@@ -32,6 +32,8 @@ VERSION="$(cargo metadata --locked --no-deps --format-version 1 \
 /usr/bin/install -d "$APP/Contents/MacOS" "$APP/Contents/Resources"
 /usr/bin/install -m 755 "$TARGET_DIR/$PROFILE/dootube" "$APP/Contents/MacOS/dootube"
 /usr/bin/install -m 644 "$ROOT/resources/DooTube.icns" "$APP/Contents/Resources/DooTube.icns"
+/usr/bin/install -d "$APP/Contents/Resources/cinema"
+/usr/bin/ditto "$ROOT/resources/cinema" "$APP/Contents/Resources/cinema"
 /usr/bin/install -m 644 "$ROOT/resources/Info.plist" "$APP/Contents/Info.plist"
 /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
 /usr/bin/plutil -lint "$APP/Contents/Info.plist"

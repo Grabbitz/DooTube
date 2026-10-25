@@ -174,3 +174,100 @@ These programmatic checks confirm frame/layout behavior and DOM fullscreen state
 ## Regional sign-in redirect handling
 
 For the exact Google-domain allowlist change, `cargo fmt`, `cargo clippy --all-targets` (no warnings), `cargo test` (10 passed), and `./scripts/build-app.sh` completed successfully. No sign-in runtime flow was exercised. The proposed regional CheckCookie/SetSID redirect chain remains unconfirmed until the user retries sign-in.
+
+## Watch reliability pass — 2026-10-25
+
+### Installed release, native input
+
+Task-scoped desktop control was approved. The installed `/Applications/DooTube.app` executable and the pre-change optimized build both had SHA-256 `a38264f953cdad718ad9a441cc1fb31f0c052e338e42acbaac85fe7402c6f5a6`. These observations describe that baseline, not the later network-state fix:
+
+- Video frames progressed in the existing Watch page; a native click paused it. F opened the borderless video stage and F returned to the normal toolbar/sidebar layout. One completed cycle was captured; this is not a frame-time or rapid-toggle benchmark.
+- The official video's seek slider reported 60 seconds after an AX increment and 55 seconds after a decrement; the captured player displayed `1:00 / 15:45` at the former position. An earlier AX value-write call returned an error and is not counted as a successful action.
+- YouTube/Music switching preserved the pages. Music changed from Play to Pause when started through the native Controls shortcut; its timeline advanced from `0:11` to `0:12`, later `1:39` and `2:11`, while its Now Playing card remained available in Watch. Starting the public Watch video changed Music's card back to Play. Sound output and absence of audible overlap were not independently measured.
+- Window → Minimize removed the main window from the visible-window list. Reopening the same app restored it with Music paused at `2:11`; a later AX read still reported that position and Play. This exercises pause-on-minimize and no automatic resume, not successful PiP background playback.
+- PiP requests on the existing playing video and the public `jNQXAC9IVRw` probe displayed `This video can't play in Picture in Picture.` No PiP window appeared. The command's rejection feedback is verified; its underlying capability/provider cause and successful PiP entry are not. No disabled-video flag or provider restriction was overridden.
+
+Some background input attempts were rejected with `UserIntervened` or `BackgroundUnavailable`; they are not counted as actions. Intermittent website keyboard-shortcut dialogs were dismissed through their AX button; their cause was not established. No app-owned queue edits, sign-in/out, account changes, or system network/volume changes were made. Viewing pages used the app's existing website session.
+
+Local captures (not portable repository assets): fullscreen stage `/var/folders/7r/s5q3ccyj5vq41z9nkm_2kgkc0000gn/T/omp-computer-15b3c43266e867c6.png`; returned Watch page `omp-computer-15b3c43c5aa867c8.png`, seek result `omp-computer-15b3c51585e867d2.png`, and PiP rejection `omp-computer-15b3c4ba7da867cf.png` in the same directory. None establishes smoothness or sound quality.
+
+### Fresh navigation after a network failure
+
+A throwaway in-process smoke used the actual app delegate, WebKit navigation callbacks, and native placeholder. Its queue HOME was `/tmp/dootube-watch-recovery-home`; the two web views used a nonpersistent website data store. A proxy override applied only to that data store, not to the installed app or system networking:
+
+1. A refused loopback HTTP CONNECT proxy produced a real `NSURLErrorDomain` error `-1004`; the failure state offered Try Again.
+2. The smoke replaced it with a loopback proxy that accepted connections without responding, then called the app's Home-loading path. Before the fix it reported `failed=true stopped=false retry_visible=true` and exited 1: the old failure persisted during the new request.
+3. With `load_in` clearing `failed` and `stopped` before requesting the new page, the same step reported `failed=false stopped=false retry_visible=false`. Native AX exposed `Loading YouTube` and a busy indicator instead of Try Again.
+4. The proxy override was removed and reload was requested; a native Home press was also exercised while the request was pending. A real page commit then asserted the placeholder was hidden and failure flags were clear. The smoke exited 0 with `WATCH_SMOKE_OK: network error, new navigation loading state, online recovery`.
+
+This is a failing-before/passing-after app-method/native-state regression smoke, not a fully native-input network-disconnection test or a test of buffered-media recovery. Background captures of the isolated window were white and do not prove settled website rendering; the loading/commit evidence is the AX state and actual delegate callbacks. No permanent native test was added because this scenario needs an AppKit main-thread application, live WebKit, and scoped proxy lifecycle rather than the ordinary isolated core-test runner.
+
+A separate nonpersistent WebKit HTML probe reported `pictureInPictureEnabled=true` both with element fullscreen enabled and disabled; disabling element fullscreen alone did not disable the PiP capability in that probe. An unattached public-site probe timed out, including a compiled retry, so it yielded no provider-capability conclusion.
+
+### Final clean build
+
+After removing the temporary module, selectors, proxy overrides, and environment gates, `cargo test` passed 19 tests, `cargo clippy --all-targets -- -D warnings` succeeded, and both `cargo build` and `./scripts/build-app.sh --release` succeeded. The release plist lint and `codesign --verify --strict --verbose=2 target/release/DooTube.app` passed.
+
+Final executable SHA-256: `0f8e2753619a89eee0f471fccd53ccd5901b7d042f1167139f2eeb62975ed0e8`. The smoke helper/source files, compiled site probe, and temporary queue HOME were removed. The rebuilt app remains at `target/release/DooTube.app`; `/Applications/DooTube.app` was not replaced.
+
+## Cinema integration — 2026-10-25
+
+This section records the 0.3.0 Cinema integration after the earlier Watch reliability pass. The actual local date was 2026-10-25 (+0700); a next-day screenshot expiry was not the verification date. Historical fingerprints above describe their own builds, not the Cinema release. GitHub's published release remains 0.2.3.
+
+### Native observation and desktop-control boundary
+
+Actual native Cinema Home and the Up Next drawer were observed through AX and owned-window screenshots. Drawer open/close and focus return were exercised before the desktop backend failed. The live queue contained zero items; no live saving, reorder, drag, or removal was exercised in this pass. Earlier hand checks remain historical.
+
+The original desktop-control session was closed. Subsequent Orca key attempts returned `window_not_focused`, including after the user confirmed focus. A later `get-app-state` AX read returned `permission_denied` even though the permission report showed accessibility and screenshots granted. No security settings or permissions were changed, and no forced keyboard route was used. Consequently, this Cinema run provides no trusted-native F, Escape, or keyboard certification.
+
+Native full-window Home and drawer captures are local artifacts:
+
+- `/var/folders/7r/s5q3ccyj5vq41z9nkm_2kgkc0000gn/T/orca-computer-use/7fb51a43-9fde-45d5-8ce5-6422f48ca3c9-screenshot.png`
+- `/var/folders/7r/s5q3ccyj5vq41z9nkm_2kgkc0000gn/T/orca-computer-use/ccb1d85e-a5f6-43dd-84ca-af086f386e46-screenshot.png`
+
+### Actual app-method and provider smoke
+
+A temporary in-process smoke used the actual `AppDelegate` and `WKWebView`s with the real existing default website session, not an isolated account. The public probe was `https://www.youtube.com/watch?v=jNQXAC9IVRw`. Two runs reported `CINEMA_SMOKE_DONE failed=false`.
+
+- Cinema Home showed the actual `Me at the zoo` title and image, zero saved cards, an intentional real empty state, and no horizontal overflow.
+- Returning Home→player retained the existing provider page without reload. In the last run the video's current time advanced from 4.366646657 to 6.990878309 seconds with `paused=false`. This progress sample was taken while the video was muted; earlier smoke phases preceded the explicit mute. The original media mute state was restored after pausing. No system volume was changed. This does not establish audible output or sustained performance.
+- Programmatically clicking the official `.ytp-fullscreen-button` entered the native 1512×982 video stage. The actual WK snapshot showed video only. Exit restored the 1512×799 provider viewport and original container. This was a JavaScript player-button click, not physical trusted input or F. An earlier generic `requestFullscreen` probe showed page overlays and is not counted as visual fullscreen proof; the definitive player-button case replaced that test entry, not the player implementation.
+- The actual Music provider reported host `music.youtube.com`, `ytmusic-app`, title `YouTube Music`, and viewport 1512×799. Music Home before entering the provider showed `Your next listen` and `Browse Music`, not fake tracks. The real provider retained the existing account and restored its site media state; new Music sound playback was not certified.
+- The initial native layout exposed a real geometry bug: an unconstrained `NSBox` consumed the content and left Home only 97 points high. Explicit 72-point Home / 116-point provider bar heights and a pinned Home fixed the Home viewport to 843 points. Provider reveal synchronizes to its container only while attached, not while on the fullscreen stage. The observed normal window was 1512×947, with a 1512×799 provider viewport.
+
+After the smoke, `~/Library/Application Support/DooTube/state.json` still had SHA-256 `de0dee94e846d8ad77b673acdb90741392b4009ad8001a45c5a846606ed5f20f`. The queue file was unchanged. No queue schema, default website data store, or bundle identifier (`com.dootube.app`) change was introduced. No account names, emails, or cookies are recorded here.
+
+Actual WKWebView snapshots, stored outside the repository:
+
+- `/tmp/dootube-cinema-final-contrast-home.png`
+- `/tmp/dootube-cinema-player-button-fullscreen.png`
+- `/tmp/dootube-cinema-official-player.png`
+- `/tmp/dootube-cinema-official-music.png`
+
+These snapshots contain actual existing-session website content. They are not fabricated OS/browser chrome, portable repository assets, or proof of trusted OS input.
+
+### Bundled renderer and contrast QA
+
+Browser-only QA of the bundled renderer covered widths 320, 375, 414, and 768: no horizontal overflow or wrapped action labels was observed. Long and Thai titles were checked. This is renderer responsiveness evidence, not native whole-app mobile certification.
+
+Hostile markup remained literal text with no injected element or hostile image; bad URL schemes were omitted. Saved-position updates and reordering preserved DOM focus, including the label `Saved at 2:22`. An unreadable queue disabled Save and showed an unavailable state rather than falsely claiming the queue was empty. These renderer cases do not imply edits to the real user's queue.
+
+Final protected-image worst-case computed WCAG ratios over pure-white artwork were 6.67:1 for muted body text, 11.12:1 for headlines, and 3.38:1 for the accent icon/ring. An 82%-opaque named dark scrim covers the copy width while artwork outside it stays visible. The final contrast adjustment did not alter structural sizing, and final native paint was observed afterward. No aggregate “58/58” score is claimed; native platform controls are not web marketing-page gates.
+
+### Clean-check and installation status
+
+Before source-freeze cleanup, the implementation owner reported 22 tests passing and `cargo clippy --all-targets -- -D warnings` succeeding. These are pre-cleanup results, not final-bundle verification.
+
+After cleanup, the engineering owner reported `cargo fmt --all`, `cargo test --locked` (22 passed), `cargo clippy --all-targets --locked -- -D warnings`, and `./scripts/build-app.sh` succeeding. The director's source review confirmed temporary `src/cinema_smoke.rs` is absent, main callbacks/load code are restored clean, and the temporary wiring and `NAV_DIAG`/`LOAD_DIAG` traces are removed.
+
+The authorized `./scripts/install.sh --open` then succeeded, building the release profile and installing `/Applications/DooTube.app`. The installed plist reports version `0.3.0` and identifier `com.dootube.app`. `codesign --verify --deep --strict --verbose=2 /Applications/DooTube.app` reported valid on disk and satisfaction of its designated requirement.
+
+Both `target/release/DooTube.app/Contents/MacOS/dootube` and `/Applications/DooTube.app/Contents/MacOS/dootube` have SHA-256 `2e7044af37f38b3692b8fd9241c41ac858c24be48bef4c11290b7b67484a8afd`. `pgrep` reported PID 90237 running the installed executable; `lsof -a -p 90237 -d txt -Fn` independently confirmed `/Applications/DooTube.app/Contents/MacOS/dootube`.
+
+The installed `Contents/Resources/cinema/` contains all six production assets: `index.html`, `cinema.js`, `cinema.css`, `tokens.css`, `BebasNeue-Regular.ttf`, and `BebasNeue-OFL.txt`. After installation, `~/Library/Application Support/DooTube/state.json` still has SHA-256 `de0dee94e846d8ad77b673acdb90741392b4009ad8001a45c5a846606ed5f20f`, unchanged from the pre-smoke baseline.
+
+A fresh read-only computer session used only window listing and `observe()` (screenshot plus AX) on the actual installed process. PID 90237's native window was titled `DooTube — YouTube` and measured 1512×947 points. Its screenshot showed warm near-black Cinema Home, a red YouTube marker, `YOUR NEXT WATCH.`, Browse YouTube, and the empty Up Next shelf. AX exposed YouTube/Music navigation, search, Up Next 0 items, 0 queued items, and `Signed in to YouTube`. This confirms final installed native paint and the retained signed-in state without recording account identity. It does not resolve the earlier input-backend failure or establish trusted physical keyboard/fullscreen, PiP, audio, or performance behavior. No input or security settings were changed in this read-only observation.
+
+This completes local installation evidence only. The published GitHub release remains 0.2.3; no 0.3.0 public release or download has been published.
+
+Limits for this Cinema pass remain successful PiP entry, trusted physical keyboard behavior after the backend failed, sound output, smoothness/resource benchmarks, sustained playback, long-duration stability, and new buffered-media/network-recovery evidence. Provider restrictions were not bypassed.

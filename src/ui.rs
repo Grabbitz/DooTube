@@ -124,54 +124,9 @@ fn cell_frame() -> NSRect {
     NSRect::new(NSPoint::new(0., 0.), NSSize::new(220., 28.))
 }
 
-/// Standard sidebar row: SF Symbol plus a single truncating line.
-pub fn sidebar_cell(
-    mtm: MainThreadMarker,
-    title: &str,
-    symbol_name: &str,
-    tooltip: Option<&str>,
-) -> Retained<NSView> {
-    let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), cell_frame());
-    let icon = NSImageView::new(mtm);
-    icon.setTranslatesAutoresizingMaskIntoConstraints(false);
-    icon.setImage(symbol(symbol_name, title).as_deref());
-    icon.setImageScaling(NSImageScaling::ScaleProportionallyDown);
-    // One optical size for every row, so mixed symbols line up. Still a template image:
-    // the source list recolors it on selection, and nothing is redrawn while scrolling.
-    let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(16., unsafe {
-        NSFontWeightRegular
-    });
-    icon.setSymbolConfiguration(Some(&config));
-    let text = label(mtm, title);
-    if let Some(tooltip) = tooltip {
-        cell.setToolTip(Some(&ns(tooltip)));
-    }
-    cell.addSubview(&icon);
-    cell.addSubview(&text);
-    unsafe {
-        cell.setImageView(Some(&icon));
-        cell.setTextField(Some(&text));
-    }
-    activate(&[
-        icon.leadingAnchor()
-            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 4.),
-        icon.centerYAnchor()
-            .constraintEqualToAnchor(&cell.centerYAnchor()),
-        icon.widthAnchor().constraintEqualToConstant(18.),
-        icon.heightAnchor().constraintEqualToConstant(18.),
-        text.leadingAnchor()
-            .constraintEqualToAnchor_constant(&icon.trailingAnchor(), 8.),
-        text.trailingAnchor()
-            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.),
-        text.centerYAnchor()
-            .constraintEqualToAnchor(&cell.centerYAnchor()),
-    ]);
-    cell.into_super()
-}
-
 /// Height of an Up Next row, which shows the video's thumbnail.
-pub const SAVED_ROW_HEIGHT: f64 = 36.;
-const THUMBNAIL_SIZE: NSSize = NSSize::new(48., 27.);
+pub const SAVED_ROW_HEIGHT: f64 = 72.;
+const THUMBNAIL_SIZE: NSSize = NSSize::new(72., 44.);
 
 /// A downloaded video thumbnail, prepared once for [`saved_cell`].
 pub fn thumbnail_image(image: &NSImage) -> Retained<NSImage> {
@@ -206,6 +161,9 @@ pub fn saved_cell(
         }
     }
     let text = label(mtm, title);
+    text.setFont(Some(&NSFont::systemFontOfSize_weight(14., unsafe {
+        NSFontWeightSemibold
+    })));
     cell.setToolTip(Some(&ns(title)));
     cell.addSubview(&icon);
     cell.addSubview(&text);
@@ -232,34 +190,12 @@ pub fn saved_cell(
     cell.into_super()
 }
 
-/// Section header for a source-list group row.
-pub fn header_cell(mtm: MainThreadMarker, title: &str) -> Retained<NSView> {
-    let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), cell_frame());
-    let text = label(mtm, title);
-    text.setFont(Some(&NSFont::systemFontOfSize_weight(11., unsafe {
-        NSFontWeightSemibold
-    })));
-    text.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    cell.addSubview(&text);
-    unsafe { cell.setTextField(Some(&text)) };
-    // Source lists don't indent group rows; line the header up with the rows' icons below it.
-    activate(&[
-        text.leadingAnchor()
-            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 14.),
-        text.trailingAnchor()
-            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.),
-        text.centerYAnchor()
-            .constraintEqualToAnchor(&cell.centerYAnchor()),
-    ]);
-    cell.into_super()
-}
-
 /// Non-selectable explanatory row, used when a section is empty.
 pub fn hint_cell(mtm: MainThreadMarker, text: &str) -> Retained<NSView> {
     let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), cell_frame());
     let field = label(mtm, text);
-    field.setFont(Some(&NSFont::systemFontOfSize(12.)));
-    field.setTextColor(Some(&NSColor::tertiaryLabelColor()));
+    field.setFont(Some(&NSFont::systemFontOfSize(14.)));
+    field.setTextColor(Some(&NSColor::secondaryLabelColor()));
     cell.addSubview(&field);
     activate(&[
         field

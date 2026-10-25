@@ -1,12 +1,12 @@
 [package]
 name = "dootube"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 
 [dependencies]
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSWindow", "NSView", "NSButton", "NSButtonCell", "NSTextField", "NSScrollView", "NSTableView", "NSTableColumn", "NSTableCellView", "NSMenu", "NSMenuItem", "NSColor", "NSFont", "NSFontDescriptor", "NSLayoutConstraint", "NSLayoutAnchor", "NSLayoutGuide", "NSStackView", "NSProgressIndicator", "NSControl", "NSResponder", "NSEvent", "NSRunningApplication", "NSWorkspace", "NSImage", "NSImageView", "NSBox", "NSText", "NSParagraphStyle", "NSSearchField", "NSSearchToolbarItem", "NSMenuToolbarItem", "NSSegmentedControl", "NSToolbar", "NSToolbarItem", "NSSplitView", "NSSplitViewController", "NSSplitViewItem", "NSViewController", "NSUserInterfaceItemIdentification", "NSUserInterfaceLayout", "NSCell", "NSGraphics", "NSPasteboard", "NSPasteboardItem", "NSDragging"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSWindow", "NSView", "NSAppearance", "NSButton", "NSButtonCell", "NSTextField", "NSScrollView", "NSTableView", "NSTableColumn", "NSTableCellView", "NSMenu", "NSMenuItem", "NSColor", "NSFont", "NSFontDescriptor", "NSLayoutConstraint", "NSLayoutAnchor", "NSLayoutGuide", "NSStackView", "NSProgressIndicator", "NSControl", "NSResponder", "NSEvent", "NSRunningApplication", "NSWorkspace", "NSImage", "NSImageView", "NSBox", "NSText", "NSParagraphStyle", "NSSearchField", "NSUserInterfaceItemIdentification", "NSUserInterfaceLayout", "NSCell", "NSGraphics", "NSPasteboard", "NSPasteboardItem", "NSDragging"] }
 objc2-foundation = { version = "0.3.2", features = ["NSString", "NSURL", "NSURLRequest", "NSNotification", "NSObject", "NSGeometry", "NSArray", "NSDictionary", "NSError", "NSFileManager", "NSIndexSet", "NSKeyValueObserving", "NSHTTPCookie", "NSSet"] }
 objc2-web-kit = { version = "0.3.2", features = ["WKWebView", "WKWebViewConfiguration", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKFrameInfo", "WKUserScript", "WKUserContentController", "WKPreferences", "WKScriptMessage", "WKScriptMessageHandler", "WKHTTPCookieStore", "WKWebsiteDataStore", "WKUIDelegate", "WKWindowFeatures", "block2"] }
 block2 = "0.6.2"

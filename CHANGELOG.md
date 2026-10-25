@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-25
+
+Locally installed at `/Applications/DooTube.app` after clean checks and signature verification. The published GitHub release remains 0.2.3; no 0.3.0 public download has been published.
+
+- Promoted the approved Cinema design into the real app: bundled Cinema Home, Netflix-inspired display typography, current-media imagery, and a saved-video shelf driven by the actual Rust state. An empty queue is shown honestly; prototype samples are not shipped.
+- Replaced the persistent split sidebar and standard toolbar with a dark native Cinema bar and an on-demand Up Next drawer. The official YouTube/Music web views, account session, queue file, native menus, fullscreen stage, and PiP commands are retained.
+- Cinema Home has its own nonpersistent local web view, restricted document/bridge origin, and bundled fonts/styles/scripts; no local server or Electron runtime is required.
+- Opening a provider destination or a search/link after a first-load failure now replaces the old error with the loading state while the new request is pending. A previous repeated-web-process error is cleared too; a new failure still offers Try Again.
+- The separate `design-preview/` remains a reference prototype. Its sample content is not used by the app; production assets and tokens live in `resources/cinema/`.
+
 ## 0.2.3 — 2026-10-24
 
 - A video saved to Up Next resumes where you left it: while it plays on YouTube, DooTube notes the position (every 15 seconds, and when it pauses, ends, or you leave the page), and opening it from Up Next starts there. Near the start or the last 20 seconds it starts over. Music, Shorts, and live links open as saved.

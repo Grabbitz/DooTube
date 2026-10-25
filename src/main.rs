@@ -1,4 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+mod cinema;
+mod cinema_bar;
 mod core;
 mod google_domains;
 mod ui;
@@ -17,26 +19,23 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationPresentationOptions, NSAutoresizingMaskOptions, NSBackingStoreType, NSBox,
-    NSBoxType, NSColor, NSControl, NSControlStateValueOff, NSControlStateValueOn,
-    NSControlTextEditingDelegate, NSDragOperation, NSDraggingInfo, NSEventModifierFlags,
-    NSEventType, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem, NSMenuToolbarItem,
-    NSPasteboardItem, NSPasteboardTypeURL, NSPasteboardWriting, NSResponder, NSScrollView,
-    NSSearchToolbarItem, NSSegmentSwitchTracking, NSSegmentedControl, NSSplitViewController,
-    NSSplitViewItem, NSStackView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
-    NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewDropOperation, NSTableViewStyle, NSText, NSTitlePosition, NSToolbar,
-    NSToolbarDelegate, NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
-    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSViewFrameDidChangeNotification,
-    NSWindow, NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode,
-    NSWindowStyleMask, NSWindowTitleVisibility, NSWindowToolbarStyle, NSWorkspace,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSApplication,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationPresentationOptions,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSButton, NSColor, NSControl,
+    NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate, NSDragOperation,
+    NSDraggingInfo, NSEventModifierFlags, NSEventType, NSFont, NSImage, NSImageScaling,
+    NSImageView, NSMenu, NSMenuItem, NSPasteboardItem, NSPasteboardTypeURL, NSPasteboardWriting,
+    NSResponder, NSScrollView, NSStackView, NSTableColumn, NSTableColumnResizingOptions,
+    NSTableView, NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
+    NSTableViewDropOperation, NSTableViewStyle, NSText, NSTextField, NSTitlePosition,
+    NSUserInterfaceLayoutOrientation, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask,
+    NSWindowTitleVisibility, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSError, NSHTTPCookie, NSIndexSet, NSInteger,
     NSMutableIndexSet, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol,
-    NSPoint, NSRect, NSSet, NSSize, NSString, NSURL, NSURLRequest, NSValue, ns_string,
+    NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSValue, ns_string,
 };
 use objc2_quartz_core::{
     CABasicAnimation, CAMediaTiming, CAMediaTimingFunction, CATransaction, CATransform3D,
@@ -46,9 +45,9 @@ use objc2_quartz_core::{
 use objc2_web_kit::{
     WKAudiovisualMediaTypes, WKContentWorld, WKHTTPCookieStore, WKHTTPCookieStoreObserver,
     WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKNavigationType, WKScriptMessage, WKScriptMessageHandler, WKUIDelegate,
-    WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebView,
-    WKSnapshotConfiguration, WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
+    WKNavigationType, WKScriptMessage, WKScriptMessageHandler, WKSnapshotConfiguration,
+    WKUIDelegate, WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+    WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
 };
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -61,14 +60,6 @@ use ui::ns;
 use url::Url;
 use web::{Mode, PageMessage, PageRect, Pane};
 
-const BACK_ID: &str = "dootube.back";
-const FORWARD_ID: &str = "dootube.forward";
-const HOME_ID: &str = "dootube.home";
-const MODE_ID: &str = "dootube.mode";
-const SEARCH_ID: &str = "dootube.search";
-const SAVE_ID: &str = "dootube.save";
-const PIP_ID: &str = "dootube.pip";
-const ACCOUNT_ID: &str = "dootube.account";
 const SIGN_OUT_URL: &str = "https://www.youtube.com/logout";
 /// Pasteboard type carrying the Up Next index of a row being dragged within the sidebar.
 const UP_NEXT_DRAG_TYPE: &str = "com.dootube.up-next-index";
@@ -122,9 +113,6 @@ fn run_js(web: &WKWebView, script: &str) {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
-    /// Index into the current section's destinations.
-    Destination(usize),
-    UpNextHeader,
     Saved(usize),
     EmptyHint,
 }
@@ -137,7 +125,14 @@ struct AppIvars {
     /// YouTube and YouTube Music panes, indexed by [`Mode::index`].
     panes: OnceCell<[Pane; 2]>,
     mode: Cell<Mode>,
-    sidebar_item: OnceCell<Retained<NSSplitViewItem>>,
+    cinema: OnceCell<Pane>,
+    cinema_document: OnceCell<Url>,
+    cinema_ready: Cell<bool>,
+    home_visible: Cell<bool>,
+    bar: OnceCell<cinema_bar::CinemaBar>,
+    queue_panel: OnceCell<Retained<NSBox>>,
+    queue_scrim: OnceCell<Retained<NSBox>>,
+    account_menu: RefCell<Option<Retained<NSMenu>>>,
     /// Pane whose video is entering, in, or leaving fullscreen.
     fullscreen_mode: Cell<Option<Mode>>,
     /// The web view has moved onto the stage window.
@@ -156,19 +151,10 @@ struct AppIvars {
     saved_presentation: Cell<Option<NSApplicationPresentationOptions>>,
     stage: OnceCell<Stage>,
     container: OnceCell<Retained<NSView>>,
-    /// Fills the content area, including the strip behind the toolbar, with the page's background.
+    /// Matches the current content while the Cinema bar keeps its own dark palette.
     backdrop: OnceCell<Retained<NSBox>>,
     native_fullscreen: Cell<bool>,
     sidebar: OnceCell<Retained<NSTableView>>,
-    search: OnceCell<Retained<NSSearchToolbarItem>>,
-    mode_control: OnceCell<Retained<NSSegmentedControl>>,
-    back_item: OnceCell<Retained<NSToolbarItem>>,
-    forward_item: OnceCell<Retained<NSToolbarItem>>,
-    home_item: OnceCell<Retained<NSToolbarItem>>,
-    mode_item: OnceCell<Retained<NSToolbarItem>>,
-    save_item: OnceCell<Retained<NSToolbarItem>>,
-    pip_item: OnceCell<Retained<NSToolbarItem>>,
-    account_item: OnceCell<Retained<NSMenuToolbarItem>>,
     placeholder: OnceCell<ui::Placeholder>,
     notice: OnceCell<ui::Notice>,
     /// `None` until the cookie store has been read once.
@@ -474,6 +460,13 @@ define_class!(
             let (Some(web), body) = (unsafe { message.webView() }, unsafe { message.body() }) else {
                 return;
             };
+            if self.is_cinema(&web) {
+                self.on_cinema_message(message, &body);
+                return;
+            }
+            if self.mode_of(&web).is_none() {
+                return;
+            }
             let report = body
                 .downcast_ref::<NSString>()
                 .and_then(|text| serde_json::from_str::<PageMessage>(&text.to_string()).ok());
@@ -595,41 +588,11 @@ define_class!(
         }
     }
 
-    unsafe impl NSToolbarDelegate for AppDelegate {
-        #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
-        fn toolbar_item(
-            &self,
-            _toolbar: &NSToolbar,
-            identifier: &NSString,
-            _will_insert: bool,
-        ) -> Option<Retained<NSToolbarItem>> {
-            let ivars = self.ivars();
-            match identifier.to_string().as_str() {
-                BACK_ID => ivars.back_item.get().cloned(),
-                FORWARD_ID => ivars.forward_item.get().cloned(),
-                HOME_ID => ivars.home_item.get().cloned(),
-                MODE_ID => ivars.mode_item.get().cloned(),
-                SAVE_ID => ivars.save_item.get().cloned(),
-                PIP_ID => ivars.pip_item.get().cloned(),
-                SEARCH_ID => ivars.search.get().map(|item| Retained::into_super(item.clone())),
-                ACCOUNT_ID => ivars.account_item.get().map(|item| Retained::into_super(item.clone())),
-                _ => None,
-            }
-        }
-        #[unsafe(method_id(toolbarDefaultItemIdentifiers:))]
-        fn default_identifiers(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSString>> {
-            toolbar_identifiers()
-        }
-        #[unsafe(method_id(toolbarAllowedItemIdentifiers:))]
-        fn allowed_identifiers(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSString>> {
-            toolbar_identifiers()
-        }
-    }
 
     unsafe impl NSTableViewDataSource for AppDelegate {
         #[unsafe(method(numberOfRowsInTableView:))]
         fn number_of_rows(&self, _table: &NSTableView) -> NSInteger {
-            self.rows().len() as NSInteger
+            self.with_state(|state| state.up_next.len()).unwrap_or(0).max(1) as NSInteger
         }
         #[unsafe(method_id(tableView:pasteboardWriterForRow:))]
         fn pasteboard_writer(
@@ -684,10 +647,6 @@ define_class!(
         ) -> Option<Retained<NSView>> {
             self.sidebar_view(row)
         }
-        #[unsafe(method(tableView:isGroupRow:))]
-        fn is_group_row(&self, _table: &NSTableView, row: NSInteger) -> bool {
-            self.row_at(row) == Some(Row::UpNextHeader)
-        }
         #[unsafe(method(tableView:heightOfRow:))]
         fn height_of_row(&self, table: &NSTableView, row: NSInteger) -> f64 {
             match self.row_at(row) {
@@ -697,7 +656,7 @@ define_class!(
         }
         #[unsafe(method(tableView:shouldSelectRow:))]
         fn should_select_row(&self, _table: &NSTableView, row: NSInteger) -> bool {
-            matches!(self.row_at(row), Some(Row::Destination(_) | Row::Saved(_)))
+            matches!(self.row_at(row), Some(Row::Saved(_)))
         }
         #[unsafe(method(tableViewSelectionDidChange:))]
         fn selection_did_change(&self, _notification: &NSNotification) {
@@ -759,22 +718,36 @@ define_class!(
         }
         #[unsafe(method(focusSearch:))]
         fn action_focus_search(&self, _sender: Option<&AnyObject>) {
-            if let Some(search) = self.ivars().search.get() {
-                search.beginSearchInteraction();
+            if let (Some(bar), Some(window)) = (self.ivars().bar.get(), self.ivars().window.get()) {
+                window.makeFirstResponder(Some(&bar.search));
+                unsafe { bar.search.selectText(None) };
             }
-        }
-        #[unsafe(method(modeChanged:))]
-        fn action_mode_changed(&self, sender: &NSSegmentedControl) {
-            let mode = if sender.selectedSegment() == 1 { Mode::Music } else { Mode::YouTube };
-            self.switch_mode(mode);
         }
         #[unsafe(method(showYouTube:))]
         fn action_show_youtube(&self, _sender: Option<&AnyObject>) {
-            self.switch_mode(Mode::YouTube);
+            self.show_cinema(Mode::YouTube);
         }
         #[unsafe(method(showMusic:))]
         fn action_show_music(&self, _sender: Option<&AnyObject>) {
+            self.show_cinema(Mode::Music);
+        }
+        #[unsafe(method(resumeMusic:))]
+        fn action_resume_music(&self, _sender: Option<&AnyObject>) {
             self.switch_mode(Mode::Music);
+        }
+        #[unsafe(method(toggleQueue:))]
+        fn action_toggle_queue(&self, _sender: Option<&AnyObject>) {
+            let visible = self.ivars().queue_panel.get().is_some_and(|panel| !panel.isHidden());
+            self.set_queue_visible(!visible);
+        }
+        #[unsafe(method(showAccountMenu:))]
+        fn action_account_menu(&self, _sender: Option<&AnyObject>) {
+            let menu = self.ivars().account_menu.borrow().clone();
+            if let (Some(menu), Some(bar)) = (menu, self.ivars().bar.get()) {
+                menu.popUpMenuPositioningItem_atLocation_inView(
+                    None, NSPoint::new(0., 0.), Some(&bar.account),
+                );
+            }
         }
         #[unsafe(method(musicPlayPause:))]
         fn action_music_play_pause(&self, _sender: Option<&AnyObject>) {
@@ -818,20 +791,25 @@ define_class!(
         }
         #[unsafe(method(goBack:))]
         fn action_back(&self, _sender: Option<&AnyObject>) {
+            self.ivars().home_visible.set(false);
+            self.set_queue_visible(false);
             if let Some(pane) = self.active() {
                 unsafe { pane.web.goBack() };
             }
+            self.show_active_pane();
         }
         #[unsafe(method(goForward:))]
         fn action_forward(&self, _sender: Option<&AnyObject>) {
+            self.ivars().home_visible.set(false);
+            self.set_queue_visible(false);
             if let Some(pane) = self.active() {
                 unsafe { pane.web.goForward() };
             }
+            self.show_active_pane();
         }
         #[unsafe(method(goHome:))]
         fn action_home(&self, _sender: Option<&AnyObject>) {
-            let mode = self.ivars().mode.get();
-            self.load_in(mode, mode.home());
+            self.show_cinema(self.ivars().mode.get());
         }
         #[unsafe(method(reloadPage:))]
         fn action_reload(&self, _sender: Option<&AnyObject>) {
@@ -881,7 +859,14 @@ impl AppDelegate {
             window: OnceCell::new(),
             panes: OnceCell::new(),
             mode: Cell::new(Mode::YouTube),
-            sidebar_item: OnceCell::new(),
+            cinema: OnceCell::new(),
+            cinema_document: OnceCell::new(),
+            cinema_ready: Cell::new(false),
+            home_visible: Cell::new(true),
+            bar: OnceCell::new(),
+            queue_panel: OnceCell::new(),
+            queue_scrim: OnceCell::new(),
+            account_menu: RefCell::new(None),
             fullscreen_mode: Cell::new(None),
             stage_shown: Cell::new(false),
             stage_leaving: Cell::new(false),
@@ -895,15 +880,6 @@ impl AppDelegate {
             backdrop: OnceCell::new(),
             native_fullscreen: Cell::new(false),
             sidebar: OnceCell::new(),
-            search: OnceCell::new(),
-            mode_control: OnceCell::new(),
-            back_item: OnceCell::new(),
-            forward_item: OnceCell::new(),
-            home_item: OnceCell::new(),
-            mode_item: OnceCell::new(),
-            save_item: OnceCell::new(),
-            pip_item: OnceCell::new(),
-            account_item: OnceCell::new(),
             placeholder: OnceCell::new(),
             notice: OnceCell::new(),
             signed_in: Cell::new(None),
@@ -943,9 +919,12 @@ impl AppDelegate {
         };
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(ns_string!("DooTube"));
-        // The page already shows its own title; the toolbar keeps only controls. The title still
-        // names the window in the Window menu, Mission Control, and accessibility.
         window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+        window.setTitlebarAppearsTransparent(true);
+        window.setBackgroundColor(Some(&cinema_bar::background_color()));
+        window.setAppearance(
+            NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }).as_deref(),
+        );
         self.build_menus();
 
         let content = NSView::new(mtm);
@@ -966,17 +945,50 @@ impl AppDelegate {
         backdrop.setBorderWidth(0.);
         backdrop.setFrame(content.bounds());
         backdrop.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
         content.addSubview(&backdrop);
         let container = NSView::new(mtm);
         container.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let bar = cinema_bar::CinemaBar::new(mtm);
+        for (button, action) in [
+            (&bar.back, sel!(goBack:)),
+            (&bar.forward, sel!(goForward:)),
+            (&bar.home, sel!(goHome:)),
+            (&bar.youtube, sel!(showYouTube:)),
+            (&bar.music, sel!(showMusic:)),
+            (&bar.save, sel!(saveCurrentVideo:)),
+            (&bar.pip, sel!(togglePictureInPicture:)),
+            (&bar.queue, sel!(toggleQueue:)),
+            (&bar.account, sel!(showAccountMenu:)),
+        ] {
+            unsafe {
+                button.setTarget(Some(self));
+                button.setAction(Some(action));
+            }
+        }
+        bar.search.setSendsWholeSearchString(true);
+        unsafe {
+            bar.search.setTarget(Some(self));
+            bar.search.setAction(Some(sel!(searchSubmitted:)));
+        }
+        content.addSubview(&bar.root);
         let safe = content.safeAreaLayoutGuide();
         content.addSubview(&container);
         ui::activate(&[
-            container
+            bar.root
                 .topAnchor()
                 .constraintEqualToAnchor(&safe.topAnchor()),
+            bar.root
+                .leadingAnchor()
+                .constraintEqualToAnchor(&content.leadingAnchor()),
+            bar.root
+                .trailingAnchor()
+                .constraintEqualToAnchor(&content.trailingAnchor()),
+            container
+                .topAnchor()
+                .constraintEqualToAnchor(&bar.root.bottomAnchor()),
             container
                 .leadingAnchor()
                 .constraintEqualToAnchor(&content.leadingAnchor()),
@@ -996,6 +1008,27 @@ impl AppDelegate {
             pane.web.setTranslatesAutoresizingMaskIntoConstraints(true);
             container.addSubview(&pane.web);
         }
+        let _ = self.ivars().bar.set(bar);
+        if let Some((home, document)) = self.build_cinema() {
+            home.web.setTranslatesAutoresizingMaskIntoConstraints(false);
+            container.addSubview(&home.web);
+            ui::activate(&[
+                home.web
+                    .topAnchor()
+                    .constraintEqualToAnchor(&container.topAnchor()),
+                home.web
+                    .bottomAnchor()
+                    .constraintEqualToAnchor(&container.bottomAnchor()),
+                home.web
+                    .leadingAnchor()
+                    .constraintEqualToAnchor(&container.leadingAnchor()),
+                home.web
+                    .trailingAnchor()
+                    .constraintEqualToAnchor(&container.trailingAnchor()),
+            ]);
+            self.ivars().cinema_document.set(document).ok();
+            self.ivars().cinema.set(home).ok();
+        }
         let _ = self.ivars().container.set(container.clone());
         let _ = self.ivars().backdrop.set(backdrop);
         content.addSubview(&placeholder.root);
@@ -1004,11 +1037,11 @@ impl AppDelegate {
             placeholder
                 .root
                 .centerXAnchor()
-                .constraintEqualToAnchor(&safe.centerXAnchor()),
+                .constraintEqualToAnchor(&container.centerXAnchor()),
             placeholder
                 .root
                 .centerYAnchor()
-                .constraintEqualToAnchor(&safe.centerYAnchor()),
+                .constraintEqualToAnchor(&container.centerYAnchor()),
             notice
                 .root
                 .centerXAnchor()
@@ -1022,38 +1055,117 @@ impl AppDelegate {
                 .widthAnchor()
                 .constraintLessThanOrEqualToAnchor_constant(&safe.widthAnchor(), -40.),
         ]);
-        let content_controller = NSViewController::new(mtm);
-        content_controller.setView(&content);
+        let scrim = NSBox::new(mtm);
+        scrim.setBoxType(NSBoxType::Custom);
+        scrim.setTitlePosition(NSTitlePosition::NoTitle);
+        scrim.setBorderWidth(0.);
+        scrim.setFillColor(&NSColor::colorWithWhite_alpha(0., 0.65));
+        scrim.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let dismiss = NSButton::new(mtm);
+        dismiss.setTitle(ns_string!(""));
+        dismiss.setBordered(false);
+        dismiss.setTranslatesAutoresizingMaskIntoConstraints(false);
+        unsafe {
+            dismiss.setTarget(Some(self));
+            dismiss.setAction(Some(sel!(toggleQueue:)));
+        }
+        scrim.addSubview(&dismiss);
+        content.addSubview(&scrim);
 
+        let drawer = NSBox::new(mtm);
+        drawer.setBoxType(NSBoxType::Custom);
+        drawer.setTitlePosition(NSTitlePosition::NoTitle);
+        drawer.setBorderWidth(0.);
+        drawer.setFillColor(&cinema_bar::raised_color());
+        drawer.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let title = NSTextField::labelWithString(ns_string!("Up Next"), mtm);
+        title.setFont(Some(&NSFont::boldSystemFontOfSize(28.)));
+        title.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let close = NSButton::new(mtm);
+        close.setTitle(ns_string!(""));
+        close.setImage(ui::symbol("xmark", "Close Up Next").as_deref());
+        close.setBordered(false);
+        close.setToolTip(Some(ns_string!("Close Up Next")));
+        close.setKeyEquivalent(&ns("\u{1b}"));
+        close.setKeyEquivalentModifierMask(NSEventModifierFlags::empty());
+        close.setTranslatesAutoresizingMaskIntoConstraints(false);
+        unsafe {
+            close.setTarget(Some(self));
+            close.setAction(Some(sel!(toggleQueue:)));
+        }
         let sidebar = self.build_sidebar();
-        let sidebar_controller = NSViewController::new(mtm);
-        sidebar_controller.setView(&sidebar);
-
-        let sidebar_item = NSSplitViewItem::sidebarWithViewController(&sidebar_controller);
-        sidebar_item.setMinimumThickness(180.);
-        sidebar_item.setMaximumThickness(320.);
-        let content_item = NSSplitViewItem::splitViewItemWithViewController(&content_controller);
-        let split = NSSplitViewController::new(mtm);
-        split.addSplitViewItem(&sidebar_item);
-        split.addSplitViewItem(&content_item);
-        self.ivars()
-            .sidebar_item
-            .set(sidebar_item)
-            .expect("sidebar item initialized once");
-        split
-            .splitView()
-            .setAutosaveName(Some(ns_string!("DooTubeSidebar")));
-        window.setContentViewController(Some(&split));
-
-        self.build_toolbar_items();
-        let toolbar =
-            NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("DooTubeMain"));
-        toolbar.setDelegate(Some(ProtocolObject::from_ref(self)));
-        toolbar.setAllowsUserCustomization(false);
-        toolbar.setDisplayMode(NSToolbarDisplayMode::IconOnly);
-        toolbar.setCenteredItemIdentifiers(&NSSet::from_slice(&[&*ns(MODE_ID)]));
-        window.setToolbar(Some(&toolbar));
-        window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+        sidebar.setTranslatesAutoresizingMaskIntoConstraints(false);
+        drawer.addSubview(&title);
+        drawer.addSubview(&close);
+        drawer.addSubview(&sidebar);
+        content.addSubview(&drawer);
+        ui::activate(&[
+            scrim
+                .topAnchor()
+                .constraintEqualToAnchor(&container.topAnchor()),
+            scrim
+                .leadingAnchor()
+                .constraintEqualToAnchor(&container.leadingAnchor()),
+            scrim
+                .trailingAnchor()
+                .constraintEqualToAnchor(&container.trailingAnchor()),
+            scrim
+                .bottomAnchor()
+                .constraintEqualToAnchor(&container.bottomAnchor()),
+            dismiss
+                .topAnchor()
+                .constraintEqualToAnchor(&scrim.topAnchor()),
+            dismiss
+                .leadingAnchor()
+                .constraintEqualToAnchor(&scrim.leadingAnchor()),
+            dismiss
+                .trailingAnchor()
+                .constraintEqualToAnchor(&scrim.trailingAnchor()),
+            dismiss
+                .bottomAnchor()
+                .constraintEqualToAnchor(&scrim.bottomAnchor()),
+            drawer
+                .topAnchor()
+                .constraintEqualToAnchor(&container.topAnchor()),
+            drawer
+                .trailingAnchor()
+                .constraintEqualToAnchor(&container.trailingAnchor()),
+            drawer
+                .bottomAnchor()
+                .constraintEqualToAnchor(&container.bottomAnchor()),
+            drawer.widthAnchor().constraintEqualToConstant(340.),
+            title
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&drawer.topAnchor(), 24.),
+            title
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&drawer.leadingAnchor(), 24.),
+            close
+                .centerYAnchor()
+                .constraintEqualToAnchor(&title.centerYAnchor()),
+            close
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&drawer.trailingAnchor(), -16.),
+            close.widthAnchor().constraintEqualToConstant(44.),
+            close.heightAnchor().constraintEqualToConstant(44.),
+            sidebar
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&title.bottomAnchor(), 24.),
+            sidebar
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&drawer.leadingAnchor(), 16.),
+            sidebar
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&drawer.trailingAnchor(), -16.),
+            sidebar
+                .bottomAnchor()
+                .constraintEqualToAnchor_constant(&drawer.bottomAnchor(), -16.),
+        ]);
+        drawer.setHidden(true);
+        scrim.setHidden(true);
+        self.ivars().queue_panel.set(drawer).ok();
+        self.ivars().queue_scrim.set(scrim).ok();
+        window.setContentView(Some(&content));
 
         window.setContentMinSize(NSSize::new(820., 480.));
         window.setContentSize(NSSize::new(1180., 760.));
@@ -1082,7 +1194,153 @@ impl AppDelegate {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let initial = args.join(" ");
         if initial.trim().is_empty() || !self.navigate(&initial) {
-            self.switch_mode(Mode::YouTube);
+            self.show_cinema(Mode::YouTube);
+        }
+    }
+
+    fn build_cinema(&self) -> Option<(Pane, Url)> {
+        let executable = std::env::current_exe().ok()?;
+        let directory = executable.parent()?.parent()?.join("Resources/cinema");
+        let document = Url::from_file_path(directory.join("index.html")).ok()?;
+        let resource_url = Url::from_directory_path(&directory).ok()?;
+        let document_nsurl = NSURL::URLWithString(&ns(document.as_str()))?;
+        let resource_nsurl = NSURL::URLWithString(&ns(resource_url.as_str()))?;
+        let config = unsafe { WKWebViewConfiguration::new(self.mtm()) };
+        unsafe {
+            config.setWebsiteDataStore(&WKWebsiteDataStore::nonPersistentDataStore(self.mtm()));
+            config.userContentController().addScriptMessageHandler_name(
+                ProtocolObject::from_ref(self),
+                &ns(cinema::MESSAGE_HANDLER),
+            );
+        }
+        let web = unsafe {
+            WKWebView::initWithFrame_configuration(
+                WKWebView::alloc(self.mtm()),
+                NSRect::ZERO,
+                &config,
+            )
+        };
+        unsafe {
+            web.setNavigationDelegate(Some(ProtocolObject::from_ref(self)));
+            web.setUnderPageBackgroundColor(Some(&cinema_bar::background_color()));
+            web.loadFileURL_allowingReadAccessToURL(&document_nsurl, &resource_nsurl);
+        }
+        Some((Pane::new(web), document))
+    }
+
+    fn is_cinema(&self, web: &WKWebView) -> bool {
+        self.ivars()
+            .cinema
+            .get()
+            .is_some_and(|home| std::ptr::eq(&*home.web, web))
+    }
+
+    fn on_cinema_message(&self, message: &WKScriptMessage, body: &AnyObject) {
+        let Some(expected) = self.ivars().cinema_document.get() else {
+            return;
+        };
+        let frame = unsafe { message.frameInfo() };
+        let actual = unsafe { frame.request() }
+            .URL()
+            .and_then(|url| url.absoluteString())
+            .and_then(|url| Url::parse(&url.to_string()).ok());
+        if unsafe { message.name() }.to_string() != cinema::MESSAGE_HANDLER
+            || !actual.is_some_and(|actual| {
+                cinema::accepts_document(&actual, expected, unsafe { frame.isMainFrame() })
+            })
+        {
+            return;
+        }
+        let action = body
+            .downcast_ref::<NSString>()
+            .and_then(|text| serde_json::from_str::<cinema::Action>(&text.to_string()).ok());
+        match action {
+            Some(cinema::Action::Ready {}) => {
+                self.ivars().cinema_ready.set(true);
+                if let Some(home) = self.ivars().cinema.get() {
+                    home.loaded.set(true);
+                }
+                self.refresh_home();
+                self.show_active_pane();
+            }
+            Some(cinema::Action::Open { url }) => {
+                if let Ok(Navigation::Page(url) | Navigation::Video(url)) = parse_input(&url) {
+                    self.load_url(url.as_str());
+                }
+            }
+            Some(cinema::Action::Resume {}) => self.switch_mode(self.ivars().mode.get()),
+            Some(cinema::Action::Queue {}) => self.set_queue_visible(true),
+            Some(cinema::Action::Save {}) => self.save_current_video(),
+            None => {}
+        }
+    }
+
+    fn refresh_home(&self) {
+        let ivars = self.ivars();
+        if !ivars.home_visible.get() || !ivars.cinema_ready.get() {
+            return;
+        }
+        let Some(home) = ivars.cinema.get() else {
+            return;
+        };
+        let url = self.current_video_url();
+        let title = url
+            .as_ref()
+            .and_then(|url| self.current_title_for(url))
+            .unwrap_or_else(|| "YouTube video".to_owned());
+        let queue = ivars.queue.borrow();
+        let track = ivars.track.borrow();
+        let current = url.as_ref().and_then(|url| {
+            let saved = queue
+                .as_ref()
+                .is_ok_and(|state| state.position(url).is_some());
+            cinema::Current::new(url, &title, saved)
+        });
+        run_js(
+            &home.web,
+            &cinema::state_script(ivars.mode.get(), &queue, &track, current),
+        );
+    }
+
+    fn show_cinema(&self, mode: Mode) {
+        self.exit_video_fullscreen(false);
+        let ivars = self.ivars();
+        ivars.mode.set(mode);
+        ivars.home_visible.set(true);
+        self.set_queue_visible(false);
+        if let Some(bar) = ivars.bar.get() {
+            bar.set_mode(mode);
+            bar.search.setStringValue(ns_string!(""));
+        }
+        self.refresh_home();
+        self.show_active_pane();
+        self.update_backdrop();
+        self.update_now_playing();
+        if let Some(window) = ivars.window.get() {
+            window.setTitle(&ns(&format!("DooTube — {}", mode.label())));
+        }
+    }
+
+    fn set_queue_visible(&self, visible: bool) {
+        let ivars = self.ivars();
+        let was_visible = ivars
+            .queue_panel
+            .get()
+            .is_some_and(|panel| !panel.isHidden());
+        if let Some(panel) = ivars.queue_panel.get() {
+            panel.setHidden(!visible);
+        }
+        if let Some(scrim) = ivars.queue_scrim.get() {
+            scrim.setHidden(!visible);
+        }
+        if visible {
+            if let (Some(window), Some(table)) = (ivars.window.get(), ivars.sidebar.get()) {
+                window.makeFirstResponder(Some(table));
+            }
+        } else if was_visible {
+            if let (Some(window), Some(bar)) = (ivars.window.get(), ivars.bar.get()) {
+                window.makeFirstResponder(Some(&bar.queue));
+            }
         }
     }
 
@@ -1151,7 +1409,9 @@ impl AppDelegate {
         let mtm = self.mtm();
         let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(220., 700.));
         let table = NSTableView::initWithFrame(NSTableView::alloc(mtm), frame);
-        table.setStyle(NSTableViewStyle::SourceList);
+        table.setStyle(NSTableViewStyle::FullWidth);
+        table.setBackgroundColor(&cinema_bar::raised_color());
+        table.setRowHeight(56.);
         table.setHeaderView(None);
         table.setFloatsGroupRows(false);
         table.setAllowsEmptySelection(true);
@@ -1235,7 +1495,7 @@ impl AppDelegate {
         self.ivars().sidebar.set(table).ok();
         let card = ui::NowPlayingCard::new(mtm);
         for (button, action) in [
-            (&card.artwork, sel!(showMusic:)),
+            (&card.artwork, sel!(resumeMusic:)),
             (&card.previous, sel!(musicPrevious:)),
             (&card.play_pause, sel!(musicPlayPause:)),
             (&card.next, sel!(musicNext:)),
@@ -1260,108 +1520,6 @@ impl AppDelegate {
         ]);
         self.ivars().now_playing.set(card).ok();
         column.into_super()
-    }
-
-    fn build_toolbar_items(&self) {
-        let mtm = self.mtm();
-        let ivars = self.ivars();
-        let button = |id: &str, label: &str, symbol: &str, action| {
-            let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), &ns(id));
-            item.setLabel(&ns(label));
-            item.setToolTip(Some(&ns(label)));
-            item.setImage(ui::symbol(symbol, label).as_deref());
-            item.setBordered(true);
-            item.setAutovalidates(false);
-            unsafe {
-                item.setTarget(Some(self));
-                item.setAction(Some(action));
-            }
-            item
-        };
-        let navigational = |item: Retained<NSToolbarItem>| {
-            // Placed by AppKit at the leading edge, after the sidebar, like Finder and Safari.
-            item.setNavigational(true);
-            item
-        };
-        ivars
-            .back_item
-            .set(navigational(button(
-                BACK_ID,
-                "Back",
-                "chevron.left",
-                sel!(goBack:),
-            )))
-            .ok();
-        ivars
-            .forward_item
-            .set(navigational(button(
-                FORWARD_ID,
-                "Forward",
-                "chevron.right",
-                sel!(goForward:),
-            )))
-            .ok();
-        ivars
-            .home_item
-            .set(navigational(button(HOME_ID, "Home", "house", sel!(goHome:))))
-            .ok();
-        ivars
-            .save_item
-            .set(button(
-                SAVE_ID,
-                "Save to Up Next",
-                "text.badge.plus",
-                sel!(saveCurrentVideo:),
-            ))
-            .ok();
-        ivars
-            .pip_item
-            .set(button(
-                PIP_ID,
-                "Picture in Picture",
-                "pip.enter",
-                sel!(togglePictureInPicture:),
-            ))
-            .ok();
-
-        let labels = NSArray::from_retained_slice(&[ns("YouTube"), ns("Music")]);
-        let control = unsafe {
-            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &labels,
-                NSSegmentSwitchTracking::SelectOne,
-                Some(self),
-                Some(sel!(modeChanged:)),
-                mtm,
-            )
-        };
-        control.setSelectedSegment(0);
-        let mode_item =
-            NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), &ns(MODE_ID));
-        mode_item.setLabel(ns_string!("Section"));
-        mode_item.setView(Some(&control));
-        ivars.mode_item.set(mode_item).ok();
-        ivars.mode_control.set(control).ok();
-
-        let account = NSMenuToolbarItem::initWithItemIdentifier(
-            NSMenuToolbarItem::alloc(mtm),
-            &ns(ACCOUNT_ID),
-        );
-        account.setLabel(ns_string!("Account"));
-        account.setShowsIndicator(false);
-        ivars.account_item.set(account).ok();
-
-        let search = NSSearchToolbarItem::initWithItemIdentifier(
-            NSSearchToolbarItem::alloc(mtm),
-            &ns(SEARCH_ID),
-        );
-        search.setPreferredWidthForSearchField(260.);
-        let field = search.searchField();
-        field.setSendsWholeSearchString(true);
-        unsafe {
-            field.setTarget(Some(self));
-            field.setAction(Some(sel!(searchSubmitted:)));
-        }
-        ivars.search.set(search).ok();
     }
 
     fn build_menus(&self) {
@@ -1437,13 +1595,13 @@ impl AppDelegate {
                 Some(mine("YouTube Music", sel!(showMusic:), "2")),
                 None,
                 Some(with_mods(
-                    item("Show Sidebar", sel!(toggleSidebar:), "s"),
+                    mine("Show Up Next", sel!(toggleQueue:), "s"),
                     control_command,
                 )),
                 None,
                 Some(mine("Back", sel!(goBack:), "[")),
                 Some(mine("Forward", sel!(goForward:), "]")),
-                Some(mine("Home", sel!(goHome:), "H")),
+                Some(mine("Cinema Home", sel!(goHome:), "H")),
                 Some(mine("Reload Page", sel!(reloadPage:), "r")),
                 None,
                 Some(with_mods(
@@ -1535,12 +1693,11 @@ impl AppDelegate {
         }
         let ivars = self.ivars();
         ivars.mode.set(mode);
-        if let Some(control) = ivars.mode_control.get() {
-            control.setSelectedSegment(mode.index() as NSInteger);
-        }
-        if let Some(search) = ivars.search.get() {
-            let field = search.searchField();
-            field.setPlaceholderString(Some(&ns(mode.search_placeholder())));
+        ivars.home_visible.set(false);
+        self.set_queue_visible(false);
+        if let Some(bar) = ivars.bar.get() {
+            bar.set_mode(mode);
+            let field = &bar.search;
             let query = self
                 .current_url()
                 .and_then(|url| mode.search_query(&url))
@@ -1552,7 +1709,10 @@ impl AppDelegate {
             .is_some_and(|pane| pane.last_requested.borrow().is_none());
         if never_opened {
             self.load_in(mode, mode.home());
-        } else if self.pane(mode).is_some_and(|pane| pane.reload_when_shown.get()) {
+        } else if self
+            .pane(mode)
+            .is_some_and(|pane| pane.reload_when_shown.get())
+        {
             self.reload_in(mode);
         }
         self.show_active_pane();
@@ -1581,6 +1741,7 @@ impl AppDelegate {
         }
         *ivars.track.borrow_mut() = track;
         self.update_now_playing();
+        self.refresh_home();
     }
 
     /// Shows downloaded artwork if it still belongs to the current track.
@@ -1660,8 +1821,14 @@ impl AppDelegate {
 
     /// Matches the content background, and with it the strip behind the toolbar, to the active page.
     fn update_backdrop(&self) {
-        if let (Some(backdrop), Some(pane)) = (self.ivars().backdrop.get(), self.active()) {
-            let color = unsafe { pane.web.underPageBackgroundColor() };
+        if let Some(backdrop) = self.ivars().backdrop.get() {
+            let color = if self.ivars().home_visible.get() {
+                cinema_bar::background_color()
+            } else {
+                self.active()
+                    .map(|pane| unsafe { pane.web.underPageBackgroundColor() })
+                    .unwrap_or_else(cinema_bar::background_color)
+            };
             backdrop.setFillColor(&color);
         }
     }
@@ -1669,11 +1836,52 @@ impl AppDelegate {
     /// Shows the active pane's page, or its loading/failure state, and hides the other pane.
     fn show_active_pane(&self) {
         let active_mode = self.ivars().mode.get();
+        let ivars = self.ivars();
+        let at_home = ivars.home_visible.get();
+        if let Some(bar) = ivars.bar.get() {
+            bar.set_player_visible(!at_home);
+        }
+        if let Some(home) = ivars.cinema.get() {
+            home.web.setHidden(!at_home);
+        }
+        if let Some(root) = ivars.window.get().and_then(|window| window.contentView()) {
+            root.layoutSubtreeIfNeeded();
+        }
         for mode in Mode::ALL {
             if let Some(pane) = self.pane(mode) {
+                if !at_home
+                    && mode == active_mode
+                    && let Some(container) = ivars.container.get()
+                    && unsafe { pane.web.superview() }
+                        .is_some_and(|parent| std::ptr::eq(&*parent, &**container))
+                {
+                    // Hidden provider panes can retain their initial zero-size viewport.
+                    // The fullscreen stage owns its own geometry while the pane is detached.
+                    let bounds = container.bounds();
+                    if pane.web.frame() != bounds {
+                        pane.web.setFrame(bounds);
+                    }
+                }
                 pane.web
-                    .setHidden(mode != active_mode || !pane.loaded.get());
+                    .setHidden(at_home || mode != active_mode || !pane.loaded.get());
             }
+        }
+        if at_home {
+            if let Some(placeholder) = ivars.placeholder.get() {
+                match ivars.cinema.get() {
+                    Some(home) if home.failed.get() => placeholder.show_failure(
+                        "exclamationmark.triangle", "Can't Open Cinema",
+                        "Press Try Again. If this persists, rebuild DooTube with scripts/build-app.sh.",
+                    ),
+                    Some(_) if ivars.cinema_ready.get() => placeholder.hide(),
+                    Some(_) => placeholder.show_loading("Opening Cinema"),
+                    None => placeholder.show_failure(
+                        "exclamationmark.triangle", "Cinema Is Missing",
+                        "Rebuild DooTube with scripts/build-app.sh to include its bundled interface.",
+                    ),
+                }
+            }
+            return;
         }
         let (Some(pane), Some(placeholder)) = (self.active(), self.ivars().placeholder.get())
         else {
@@ -1716,6 +1924,7 @@ impl AppDelegate {
         }
         if mode == self.ivars().mode.get() {
             self.update_window_title();
+            self.refresh_home();
         }
     }
 
@@ -1765,33 +1974,21 @@ impl AppDelegate {
         self.ivars().queue.borrow().as_ref().ok().map(read)
     }
 
-    fn rows(&self) -> Vec<Row> {
-        let destinations = self.ivars().mode.get().destinations().len();
-        let mut rows: Vec<Row> = (0..destinations).map(Row::Destination).collect();
-        rows.push(Row::UpNextHeader);
-        let count = self.with_state(|state| state.up_next.len()).unwrap_or(0);
-        if count == 0 {
-            rows.push(Row::EmptyHint);
-        } else {
-            rows.extend((0..count).map(Row::Saved));
-        }
-        rows
-    }
-
     fn row_at(&self, row: NSInteger) -> Option<Row> {
-        usize::try_from(row)
-            .ok()
-            .and_then(|row| self.rows().get(row).copied())
+        let index = usize::try_from(row).ok()?;
+        let count = self.with_state(|state| state.up_next.len()).unwrap_or(0);
+        if count == 0 && index == 0 {
+            Some(Row::EmptyHint)
+        } else if index < count {
+            Some(Row::Saved(index))
+        } else {
+            None
+        }
     }
 
     fn sidebar_view(&self, row: NSInteger) -> Option<Retained<NSView>> {
         let mtm = self.mtm();
         Some(match self.row_at(row)? {
-            Row::Destination(index) => {
-                let destination = &self.ivars().mode.get().destinations()[index];
-                ui::sidebar_cell(mtm, destination.title, destination.symbol, None)
-            }
-            Row::UpNextHeader => ui::header_cell(mtm, "Up Next"),
             Row::Saved(index) => {
                 let (label, music, thumbnail) = self.with_state(|state| {
                     state.up_next.get(index).map(|item| {
@@ -1907,17 +2104,27 @@ impl AppDelegate {
     }
 
     fn row_index(&self, target: Row) -> NSInteger {
-        self.rows()
-            .iter()
-            .position(|row| *row == target)
-            .map_or(-1, |index| index as NSInteger)
+        match target {
+            Row::Saved(index)
+                if self
+                    .with_state(|state| index < state.up_next.len())
+                    .unwrap_or(false) =>
+            {
+                index as NSInteger
+            }
+            Row::EmptyHint
+                if self
+                    .with_state(|state| state.up_next.is_empty())
+                    .unwrap_or(true) =>
+            {
+                0
+            }
+            _ => -1,
+        }
     }
 
     fn open_row(&self, row: NSInteger) {
         let url = match self.row_at(row) {
-            Some(Row::Destination(index)) => {
-                self.ivars().mode.get().destinations()[index].url.to_owned()
-            }
             Some(Row::Saved(index)) => {
                 match self
                     .with_state(|state| state.up_next.get(index).map(|item| item.resume_url()))
@@ -1929,6 +2136,7 @@ impl AppDelegate {
             _ => return,
         };
         self.load_url(&url);
+        self.set_queue_visible(false);
     }
 
     fn reload_sidebar(&self) {
@@ -1939,6 +2147,10 @@ impl AppDelegate {
         }
         self.sync_sidebar_selection();
         self.update_toolbar();
+        if let Some(bar) = self.ivars().bar.get() {
+            bar.set_queue_count(self.with_state(|state| state.up_next.len()).unwrap_or(0));
+        }
+        self.refresh_home();
     }
 
     /// The current section's destination for a page, if any.
@@ -1966,7 +2178,7 @@ impl AppDelegate {
             {
                 return Some(Row::Saved(index));
             }
-            self.destination_for(&url).map(Row::Destination)
+            None
         });
         self.ivars().syncing_selection.set(true);
         match target
@@ -2028,6 +2240,13 @@ impl AppDelegate {
         };
         if action == sel!(showYouTube:) {
             check(mode == Mode::YouTube)
+        } else if action == sel!(toggleQueue:) {
+            check(
+                self.ivars()
+                    .queue_panel
+                    .get()
+                    .is_some_and(|panel| !panel.isHidden()),
+            )
         } else if action == sel!(showMusic:) {
             check(mode == Mode::Music)
         } else if action == sel!(togglePictureInPicture:) {
@@ -2168,8 +2387,8 @@ impl AppDelegate {
     fn on_page_url_changed(&self) {
         let mode = self.ivars().mode.get();
         // Show the open results page's query; clear a stale one elsewhere unless it's being typed.
-        if let Some(search) = self.ivars().search.get() {
-            let field = search.searchField();
+        if let Some(bar) = self.ivars().bar.get() {
+            let field = &bar.search;
             if field.currentEditor().is_none() {
                 let query = self
                     .current_url()
@@ -2181,6 +2400,7 @@ impl AppDelegate {
         self.sync_sidebar_selection();
         self.update_toolbar();
         self.update_window_title();
+        self.refresh_home();
     }
 
     fn on_page_title_changed(&self, web: &WKWebView) {
@@ -2195,6 +2415,7 @@ impl AppDelegate {
             return;
         }
         self.update_window_title();
+        self.refresh_home();
         // Fill in titles for videos saved before their title was known.
         if let Some(url) = self.current_video_url()
             && let Some(title) = self.current_title_for(&url)
@@ -2212,6 +2433,9 @@ impl AppDelegate {
     }
 
     fn update_window_title(&self) {
+        if self.ivars().home_visible.get() {
+            return;
+        }
         let (Some(window), Some(pane)) = (self.ivars().window.get(), self.active()) else {
             return;
         };
@@ -2236,24 +2460,13 @@ impl AppDelegate {
 
     fn update_toolbar(&self) {
         let ivars = self.ivars();
-        let web = self.active().map(|pane| &pane.web);
-        if let Some(item) = ivars.back_item.get() {
-            item.setEnabled(web.is_some_and(|web| unsafe { web.canGoBack() }));
-        }
-        if let Some(item) = ivars.forward_item.get() {
-            item.setEnabled(web.is_some_and(|web| unsafe { web.canGoForward() }));
-        }
-        if let Some(item) = ivars.save_item.get() {
-            let saved = self.save_state_for_current();
-            let (label, symbol) = if saved == Some(true) {
-                ("Saved in Up Next", "text.badge.checkmark")
-            } else {
-                ("Save to Up Next", "text.badge.plus")
-            };
-            item.setEnabled(saved == Some(false));
-            item.setLabel(&ns(label));
-            item.setToolTip(Some(&ns(label)));
-            item.setImage(ui::symbol(symbol, label).as_deref());
+        if let Some(bar) = ivars.bar.get() {
+            let web = self.active().map(|pane| &pane.web);
+            bar.set_navigation(
+                web.is_some_and(|web| unsafe { web.canGoBack() }),
+                web.is_some_and(|web| unsafe { web.canGoForward() }),
+            );
+            bar.set_saved(self.save_state_for_current());
         }
     }
 
@@ -2368,26 +2581,25 @@ impl AppDelegate {
 
     fn update_account_ui(&self) {
         let mtm = self.mtm();
-        let Some(item) = self.ivars().account_item.get() else {
+        let Some(bar) = self.ivars().bar.get() else {
             return;
         };
         let signed_in = self.ivars().signed_in.get() == Some(true);
         let identity = self.ivars().account_identity.borrow();
         let display_identity = identity.as_ref().filter(|_| signed_in);
-        let (status, symbol) = if let Some(identity) = display_identity {
-            let status = identity
+        let status = if let Some(identity) = display_identity {
+            identity
                 .email
                 .as_deref()
                 .or(identity.handle.as_deref())
                 .map_or_else(
                     || format!("Signed in as {}", identity.name),
                     |contact| format!("Signed in as {} ({contact})", identity.name),
-                );
-            (status, "person.crop.circle.fill")
+                )
         } else if signed_in {
-            ("Signed in to YouTube".to_owned(), "person.crop.circle.fill")
+            "Signed in to YouTube".to_owned()
         } else {
-            ("Not signed in".to_owned(), "person.crop.circle")
+            "Not signed in".to_owned()
         };
         let name = display_identity.map_or(
             if signed_in {
@@ -2444,14 +2656,8 @@ impl AppDelegate {
                 Some(self),
             ));
         }
-        item.setMenu(&menu);
-        let toolbar_photo = photo.as_deref().map(|photo| ui::circular_image(photo, 20.));
-        item.setImage(
-            toolbar_photo
-                .or_else(|| ui::symbol(symbol, &status))
-                .as_deref(),
-        );
-        item.setToolTip(Some(&ns(&status)));
+        bar.set_account(&status, photo.as_deref());
+        *self.ivars().account_menu.borrow_mut() = Some(menu);
     }
 
     // MARK: Navigation
@@ -2461,6 +2667,23 @@ impl AppDelegate {
         web_view: &WKWebView,
         action: &WKNavigationAction,
     ) -> WKNavigationActionPolicy {
+        if self.is_cinema(web_view) {
+            let target = unsafe { action.request() }
+                .URL()
+                .and_then(|url| url.absoluteString())
+                .and_then(|url| Url::parse(&url.to_string()).ok());
+            let main_frame =
+                unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() });
+            return if self.ivars().cinema_document.get().is_some_and(|expected| {
+                target
+                    .as_ref()
+                    .is_some_and(|actual| cinema::accepts_document(actual, expected, main_frame))
+            }) {
+                WKNavigationActionPolicy::Allow
+            } else {
+                WKNavigationActionPolicy::Cancel
+            };
+        }
         let request = unsafe { action.request() };
         let target = request.URL();
         let frame = unsafe { action.targetFrame() };
@@ -2584,6 +2807,8 @@ impl AppDelegate {
     }
 
     fn load_in(&self, mode: Mode, url: &str) {
+        self.ivars().home_visible.set(false);
+        self.set_queue_visible(false);
         let Some(pane) = self.pane(mode) else {
             return;
         };
@@ -2592,6 +2817,9 @@ impl AppDelegate {
             return;
         };
         *pane.last_requested.borrow_mut() = Some(url.to_owned());
+        // A new navigation replaces the previous failure while WebKit tries the new request.
+        pane.failed.set(false);
+        pane.stopped.set(false);
         // This load replaces any pending reload of a page whose web process ended.
         pane.reload_when_shown.set(false);
         if self.ivars().mode.get() != mode {
@@ -2602,6 +2830,10 @@ impl AppDelegate {
     }
 
     fn reload_page(&self) {
+        if self.ivars().home_visible.get() {
+            self.reload_cinema();
+            return;
+        }
         self.reload_in(self.ivars().mode.get());
     }
 
@@ -2626,11 +2858,39 @@ impl AppDelegate {
         self.load_in(mode, &url);
     }
 
+    fn reload_cinema(&self) {
+        if let Some(home) = self.ivars().cinema.get() {
+            home.failed.set(false);
+            home.stopped.set(false);
+            self.ivars().cinema_ready.set(false);
+            unsafe { home.web.reload() };
+            self.show_active_pane();
+        }
+    }
+
     /// WebKit ended a page's web process: it crashed, or macOS reclaimed its memory. Like Safari,
     /// the page reloads on its own (a section in the background when it is next shown). If it
     /// ends again within a minute, the section shows a Try Again state instead of reloading in a
     /// loop.
     fn on_web_process_ended(&self, web: &WKWebView) {
+        if self.is_cinema(web) {
+            if let Some(home) = self.ivars().cinema.get() {
+                home.loaded.set(false);
+                self.ivars().cinema_ready.set(false);
+                let now = Instant::now();
+                if home
+                    .ended_at
+                    .replace(Some(now))
+                    .is_some_and(|last| now.duration_since(last) < Duration::from_secs(60))
+                {
+                    home.failed.set(true);
+                } else {
+                    unsafe { home.web.reload() };
+                }
+                self.show_active_pane();
+            }
+            return;
+        }
         let Some(mode) = self.mode_of(web) else {
             return;
         };
@@ -2665,6 +2925,15 @@ impl AppDelegate {
     }
 
     fn on_load_error(&self, web: &WKWebView, error: &NSError) {
+        if self.is_cinema(web) {
+            if error.code() != -999
+                && let Some(home) = self.ivars().cinema.get()
+            {
+                home.failed.set(true);
+                self.show_active_pane();
+            }
+            return;
+        }
         let domain = error.domain().to_string();
         // Cancelled loads and loads stopped by the navigation policy are not failures.
         if error.code() == -999 || (domain == "WebKitErrorDomain" && error.code() == 102) {
@@ -2816,7 +3085,9 @@ impl AppDelegate {
         shown_width: f64,
         then: impl Fn(Option<&NSImage>) + 'static,
     ) {
-        let scale = web.window().map_or(1., |window| window.backingScaleFactor());
+        let scale = web
+            .window()
+            .map_or(1., |window| window.backingScaleFactor());
         let config = unsafe { WKSnapshotConfiguration::new(self.mtm()) };
         unsafe {
             config.setRect(rect);
@@ -3203,31 +3474,6 @@ impl AppDelegate {
             window.setFrameAutosaveName(ns_string!("DooTubeMainWindow"));
         }
     }
-}
-
-fn toolbar_identifiers() -> Retained<NSArray<NSString>> {
-    let custom = [
-        BACK_ID, FORWARD_ID, HOME_ID, MODE_ID, SEARCH_ID, PIP_ID, SAVE_ID, ACCOUNT_ID,
-    ]
-    .map(ns);
-    let [back, forward, home, mode, search, pip, save, account] = &custom;
-    let ids: [&NSString; 12] = unsafe {
-        [
-            NSToolbarToggleSidebarItemIdentifier,
-            NSToolbarSidebarTrackingSeparatorItemIdentifier,
-            back,
-            forward,
-            home,
-            NSToolbarFlexibleSpaceItemIdentifier,
-            mode,
-            NSToolbarFlexibleSpaceItemIdentifier,
-            search,
-            pip,
-            save,
-            account,
-        ]
-    };
-    NSArray::from_slice(&ids)
 }
 
 /// Downloads a small image (account photo or artwork) off the main thread, then hands it to
