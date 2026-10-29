@@ -1,23 +1,30 @@
 /*
- * DooTube's native toolbar and sidebar replace YouTube's website masthead and guide.
- * Only site navigation chrome is hidden; the official player, its controls, branding,
- * ads, captions, and page content are left untouched.
+ * DooTube's native bar replaces YouTube's website masthead (search, account, logo).
+ * YouTube's own guide (Home, Shorts, Subscriptions, You) stays, as on youtube.com.
+ * The official player, its controls, branding, ads, captions, and page content are untouched.
  */
-#masthead-container,
-ytd-mini-guide-renderer,
-tp-yt-app-drawer#guide {
+#masthead-container {
   display: none !important;
 }
 
 ytd-app {
   --ytd-toolbar-height: 0px !important;
   --ytd-masthead-height: 0px !important;
-  --ytd-mini-guide-width: 0px !important;
 }
 
 ytd-app #page-manager.ytd-app {
   margin-top: 0 !important;
-  margin-left: 0 !important;
+}
+
+ytd-mini-guide-renderer,
+tp-yt-app-drawer#guide #contentContainer {
+  top: 0 !important;
+  padding-top: 0 !important;
+}
+
+/* The guide's own header repeats the hidden masthead's menu button and logo. */
+tp-yt-app-drawer#guide #header {
+  display: none !important;
 }
 
 /* The frosted backdrop spans masthead + chip bar; shift it up by the hidden masthead height. */

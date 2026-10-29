@@ -1,22 +1,15 @@
 /*
- * DooTube's native toolbar and sidebar replace YouTube Music's website nav bar and guide.
- * Only site navigation chrome is hidden; the player page, player bar, controls, branding,
- * ads, lyrics, and page content are left untouched.
+ * DooTube's native bar replaces YouTube Music's website nav bar (search, account, logo).
+ * YouTube Music's own guide (Home, Explore, Library) stays, as on music.youtube.com.
+ * The player page, player bar, controls, branding, ads, lyrics, and page content are untouched.
  */
 ytmusic-nav-bar,
 #nav-bar-background,
-#nav-bar-divider,
-#guide-wrapper,
-#mini-guide,
-#mini-guide-background,
-#guide-spacer,
-#mini-guide-spacer {
+#nav-bar-divider {
   display: none !important;
 }
 
 ytmusic-app,
 ytmusic-app-layout {
   --ytmusic-nav-bar-height: 0px !important;
-  --ytmusic-guide-width: 0px !important;
-  --ytmusic-mini-guide-width: 0px !important;
 }

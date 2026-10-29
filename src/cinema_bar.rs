@@ -1,26 +1,25 @@
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSAccessibility, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSFontWeightRegular,
-    NSFontWeightSemibold, NSImage, NSImageScaling, NSLayoutConstraint,
-    NSLayoutConstraintOrientation, NSSearchField, NSStackView, NSTextAlignment, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSView,
+    NSFontWeightSemibold, NSImage, NSImageScaling, NSLayoutConstraintOrientation, NSSearchField,
+    NSStackView, NSTextAlignment, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSSize};
+use objc2_foundation::{MainThreadMarker, NSSize};
 
 use crate::{
     ui::{activate, circular_image, ns, symbol},
     web::Mode,
 };
 
-// sRGB projections of the canonical OKLCH palette in resources/cinema/tokens.css.
+// Close to YouTube's own dark theme, so the bar and drawer read as part of the page.
 const RED: (f64, f64, f64) = (0.929263, 0.293140, 0.264086);
 
 pub fn background_color() -> Retained<NSColor> {
-    NSColor::colorWithSRGBRed_green_blue_alpha(0.039636, 0.024776, 0.023106, 1.)
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.059, 0.059, 0.059, 1.)
 }
 
 pub fn raised_color() -> Retained<NSColor> {
-    NSColor::colorWithSRGBRed_green_blue_alpha(0.092784, 0.071825, 0.069001, 1.)
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.13, 0.13, 0.13, 1.)
 }
 
 pub fn accent_color() -> Retained<NSColor> {
@@ -44,28 +43,31 @@ pub struct CinemaBar {
     pub account: Retained<NSButton>,
     pub search: Retained<NSSearchField>,
     count: Retained<NSTextField>,
-    playback: Retained<NSStackView>,
-    height: Retained<NSLayoutConstraint>,
 }
 
+/// Height of the bar, which shares its row with the window's traffic lights.
+pub const HEIGHT: f64 = 52.;
+
 impl CinemaBar {
+    /// One YouTube-style row: navigation and sections on the left, search centered, and
+    /// video, queue, and account actions on the right. Clear, so the page color shows through.
     pub fn new(mtm: MainThreadMarker) -> Self {
         let root = NSBox::new(mtm);
         root.setBoxType(NSBoxType::Custom);
         root.setBorderWidth(0.);
         root.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
-        root.setFillColor(&background_color());
+        root.setFillColor(&NSColor::clearColor());
         root.setContentViewMargins(NSSize::new(0., 0.));
         root.setTranslatesAutoresizingMaskIntoConstraints(false);
 
-        let brand = NSTextField::labelWithString(&ns("DooTube"), mtm);
-        brand.setFont(Some(&NSFont::systemFontOfSize_weight(23., unsafe {
+        let home = icon_button(mtm, "play.rectangle.fill", "Home");
+        home.setContentTintColor(Some(&accent_color()));
+        home.setTitle(&ns("DooTube"));
+        home.setImagePosition(objc2_app_kit::NSCellImagePosition::ImageLeading);
+        home.setFont(Some(&NSFont::systemFontOfSize_weight(17., unsafe {
             NSFontWeightSemibold
         })));
-        brand.setTextColor(Some(&ink_color()));
-        brand.setToolTip(Some(&ns("DooTube")));
-        brand.setAccessibilityLabel(Some(&ns("DooTube")));
-        brand.setTranslatesAutoresizingMaskIntoConstraints(false);
+        home.setToolTip(Some(&ns("Home")));
 
         let youtube = mode_button(mtm, "YouTube");
         let music = mode_button(mtm, "Music");
@@ -73,136 +75,95 @@ impl CinemaBar {
         search.setPlaceholderString(Some(&ns("Search YouTube")));
         search.setToolTip(Some(&ns("Search YouTube")));
         search.setAccessibilityLabel(Some(&ns("Search YouTube")));
+        search.setFont(Some(&NSFont::systemFontOfSize(14.)));
         search.setTranslatesAutoresizingMaskIntoConstraints(false);
 
         let queue = icon_button(mtm, "list.bullet", "Up Next");
         let count = NSTextField::labelWithString(&ns("0"), mtm);
-        count.setFont(Some(&NSFont::systemFontOfSize(14.)));
+        count.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
+            12.,
+            unsafe { NSFontWeightRegular },
+        )));
         count.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        count.setAlignment(NSTextAlignment::Center);
+        count.setAlignment(NSTextAlignment::Left);
         count.setAccessibilityLabel(Some(&ns("Queued items")));
-        count.setTranslatesAutoresizingMaskIntoConstraints(false);
 
         let account = icon_button(mtm, "person.crop.circle", "Account");
         let back = icon_button(mtm, "chevron.left", "Back");
         let forward = icon_button(mtm, "chevron.right", "Forward");
-        let home = icon_button(mtm, "house", "Cinema Home");
         let save = icon_button(mtm, "bookmark", "Save video");
-        let pip = icon_button(mtm, "pip", "Picture in Picture");
+        let pip = icon_button(mtm, "pip.enter", "Picture in Picture");
 
-        let main_line = horizontal(mtm, 10.);
-        let spacer = NSView::new(mtm);
-        spacer.setTranslatesAutoresizingMaskIntoConstraints(false);
-        spacer.setContentHuggingPriority_forOrientation(
-            1.,
-            NSLayoutConstraintOrientation::Horizontal,
-        );
-        spacer.setContentCompressionResistancePriority_forOrientation(
-            1.,
-            NSLayoutConstraintOrientation::Horizontal,
-        );
-        main_line.addArrangedSubview(&brand);
-        main_line.addArrangedSubview(&youtube);
-        main_line.addArrangedSubview(&music);
-        main_line.addArrangedSubview(&spacer);
-        main_line.addArrangedSubview(&search);
-        main_line.addArrangedSubview(&queue);
-        main_line.addArrangedSubview(&count);
-        main_line.addArrangedSubview(&account);
-        let playback = horizontal(mtm, 8.);
-        for button in [&back, &forward, &home, &save, &pip] {
-            playback.addArrangedSubview(button);
+        let left = horizontal(mtm, 4.);
+        for view in [&back as &NSView, &forward, &home] {
+            left.addArrangedSubview(view);
         }
-        playback.setHidden(true);
-        let layout = NSStackView::new(mtm);
-        layout.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        layout.setDetachesHiddenViews(true);
-        layout.setSpacing(4.);
-        layout.setEdgeInsets(NSEdgeInsets {
-            top: 8.,
-            left: 24.,
-            bottom: 8.,
-            right: 24.,
-        });
-        layout.addArrangedSubview(&main_line);
-        layout.addArrangedSubview(&playback);
-        root.addSubview(&layout);
-        // NSBox has no content-driven intrinsic height. Keep it from consuming the viewport.
-        let height = root.heightAnchor().constraintEqualToConstant(72.);
-        height.setActive(true);
-
-        for view in [
-            &brand as &NSView,
-            &youtube,
-            &music,
-            &queue,
-            &account,
-            &back,
-            &forward,
-            &home,
-            &save,
-            &pip,
-            &count,
-            &search,
-            &main_line,
-            &playback,
-            &layout,
-        ] {
-            view.setTranslatesAutoresizingMaskIntoConstraints(false);
+        left.setCustomSpacing_afterView(14., &home);
+        left.addArrangedSubview(&youtube);
+        left.addArrangedSubview(&music);
+        let right = horizontal(mtm, 6.);
+        for view in [&save as &NSView, &pip, &queue] {
+            right.addArrangedSubview(view);
         }
-        search.setContentHuggingPriority_forOrientation(
+        right.addArrangedSubview(&count);
+        right.setCustomSpacing_afterView(10., &count);
+        right.addArrangedSubview(&account);
+        for view in [&left as &NSView, &right, &search] {
+            root.addSubview(view);
+        }
+        let height = root.heightAnchor().constraintEqualToConstant(HEIGHT);
+        // The search field stays centered in the window but yields to both sides when narrow.
+        let centered = search
+            .centerXAnchor()
+            .constraintEqualToAnchor(&root.centerXAnchor());
+        centered.setPriority(700.);
+        let wide = search.widthAnchor().constraintEqualToConstant(520.);
+        wide.setPriority(600.);
+        search.setContentCompressionResistancePriority_forOrientation(
             250.,
             NSLayoutConstraintOrientation::Horizontal,
         );
-        search.setContentCompressionResistancePriority_forOrientation(
-            1.,
-            NSLayoutConstraintOrientation::Horizontal,
-        );
         activate(&[
-            layout
-                .leadingAnchor()
-                .constraintEqualToAnchor(&root.leadingAnchor()),
-            layout
+            height,
+            centered,
+            wide,
+            // Clears the traffic lights, which sit in this row.
+            left.leadingAnchor()
+                .constraintEqualToAnchor_constant(&root.leadingAnchor(), 80.),
+            left.centerYAnchor()
+                .constraintEqualToAnchor(&root.centerYAnchor()),
+            right
                 .trailingAnchor()
-                .constraintEqualToAnchor(&root.trailingAnchor()),
-            layout
-                .topAnchor()
-                .constraintEqualToAnchor(&root.topAnchor()),
-            layout
-                .bottomAnchor()
-                .constraintEqualToAnchor(&root.bottomAnchor()),
-            main_line.heightAnchor().constraintEqualToConstant(56.),
-            playback.heightAnchor().constraintEqualToConstant(40.),
-            youtube.heightAnchor().constraintEqualToConstant(44.),
-            music.heightAnchor().constraintEqualToConstant(44.),
-            queue.heightAnchor().constraintEqualToConstant(44.),
-            account.heightAnchor().constraintEqualToConstant(44.),
-            search.heightAnchor().constraintEqualToConstant(32.),
+                .constraintEqualToAnchor_constant(&root.trailingAnchor(), -16.),
+            right
+                .centerYAnchor()
+                .constraintEqualToAnchor(&root.centerYAnchor()),
+            search
+                .centerYAnchor()
+                .constraintEqualToAnchor(&root.centerYAnchor()),
+            search
+                .leadingAnchor()
+                .constraintGreaterThanOrEqualToAnchor_constant(&left.trailingAnchor(), 16.),
+            search
+                .trailingAnchor()
+                .constraintLessThanOrEqualToAnchor_constant(&right.leadingAnchor(), -16.),
+            search.heightAnchor().constraintEqualToConstant(30.),
             search
                 .widthAnchor()
-                .constraintLessThanOrEqualToConstant(280.),
-            brand
-                .widthAnchor()
-                .constraintGreaterThanOrEqualToConstant(108.),
-            youtube
-                .widthAnchor()
-                .constraintGreaterThanOrEqualToConstant(66.),
-            music
-                .widthAnchor()
-                .constraintGreaterThanOrEqualToConstant(58.),
+                .constraintGreaterThanOrEqualToConstant(140.),
             search
                 .widthAnchor()
-                .constraintGreaterThanOrEqualToConstant(100.),
-            queue.widthAnchor().constraintEqualToConstant(44.),
-            account.widthAnchor().constraintEqualToConstant(44.),
-            back.widthAnchor().constraintEqualToConstant(32.),
-            forward.widthAnchor().constraintEqualToConstant(32.),
-            home.widthAnchor().constraintEqualToConstant(36.),
-            save.widthAnchor().constraintEqualToConstant(36.),
-            pip.widthAnchor().constraintEqualToConstant(36.),
+                .constraintLessThanOrEqualToConstant(520.),
+            back.widthAnchor().constraintEqualToConstant(28.),
+            forward.widthAnchor().constraintEqualToConstant(28.),
+            save.widthAnchor().constraintEqualToConstant(32.),
+            pip.widthAnchor().constraintEqualToConstant(32.),
+            queue.widthAnchor().constraintEqualToConstant(32.),
+            account.widthAnchor().constraintEqualToConstant(32.),
+            account.heightAnchor().constraintEqualToConstant(32.),
             count
                 .widthAnchor()
-                .constraintGreaterThanOrEqualToConstant(22.),
+                .constraintGreaterThanOrEqualToConstant(14.),
         ]);
         let bar = Self {
             root,
@@ -217,11 +178,8 @@ impl CinemaBar {
             account,
             search,
             count,
-            playback,
-            height,
         };
         bar.set_mode(Mode::YouTube);
-        bar.set_player_visible(false);
         bar.set_saved(None);
         bar.set_queue_count(0);
         bar.set_navigation(false, false);
@@ -229,7 +187,7 @@ impl CinemaBar {
     }
 
     pub fn set_mode(&self, mode: Mode) {
-        let (active, inactive) = (accent_color(), NSColor::secondaryLabelColor());
+        let (active, inactive) = (ink_color(), NSColor::secondaryLabelColor());
         let youtube_on = matches!(mode, Mode::YouTube);
         let music_on = !youtube_on;
         self.youtube
@@ -242,16 +200,11 @@ impl CinemaBar {
             } else {
                 unsafe { NSFontWeightRegular }
             };
-            button.setFont(Some(&NSFont::systemFontOfSize_weight(14., weight)));
+            button.setFont(Some(&NSFont::systemFontOfSize_weight(13., weight)));
         }
         let placeholder = ns(mode.search_placeholder());
         self.search.setPlaceholderString(Some(&placeholder));
         self.search.setAccessibilityLabel(Some(&placeholder));
-    }
-
-    pub fn set_player_visible(&self, visible: bool) {
-        self.playback.setHidden(!visible);
-        self.height.setConstant(if visible { 116. } else { 72. });
     }
 
     pub fn set_saved(&self, saved: Option<bool>) {
@@ -288,6 +241,7 @@ impl CinemaBar {
     pub fn set_queue_count(&self, count: usize) {
         let text = count.to_string();
         self.count.setStringValue(&ns(&text));
+        self.count.setHidden(count == 0);
         self.count
             .setAccessibilityLabel(Some(&ns(&format!("{count} queued items"))));
         self.queue

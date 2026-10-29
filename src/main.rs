@@ -1,5 +1,4 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-mod cinema;
 mod cinema_bar;
 mod core;
 mod google_domains;
@@ -27,10 +26,10 @@ use objc2_app_kit::{
     NSImageView, NSMenu, NSMenuItem, NSPasteboardItem, NSPasteboardTypeURL, NSPasteboardWriting,
     NSResponder, NSScrollView, NSStackView, NSTableColumn, NSTableColumnResizingOptions,
     NSTableView, NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewDropOperation, NSTableViewStyle, NSText, NSTextField, NSTitlePosition,
+    NSTableViewDropOperation, NSTableViewStyle, NSText, NSTextField, NSTitlePosition, NSToolbar,
     NSUserInterfaceLayoutOrientation, NSView, NSViewFrameDidChangeNotification, NSWindow,
     NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask,
-    NSWindowTitleVisibility, NSWorkspace,
+    NSWindowTitleVisibility, NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSError, NSHTTPCookie, NSIndexSet, NSInteger,
@@ -125,10 +124,6 @@ struct AppIvars {
     /// YouTube and YouTube Music panes, indexed by [`Mode::index`].
     panes: OnceCell<[Pane; 2]>,
     mode: Cell<Mode>,
-    cinema: OnceCell<Pane>,
-    cinema_document: OnceCell<Url>,
-    cinema_ready: Cell<bool>,
-    home_visible: Cell<bool>,
     bar: OnceCell<cinema_bar::CinemaBar>,
     queue_panel: OnceCell<Retained<NSBox>>,
     queue_scrim: OnceCell<Retained<NSBox>>,
@@ -460,10 +455,6 @@ define_class!(
             let (Some(web), body) = (unsafe { message.webView() }, unsafe { message.body() }) else {
                 return;
             };
-            if self.is_cinema(&web) {
-                self.on_cinema_message(message, &body);
-                return;
-            }
             if self.mode_of(&web).is_none() {
                 return;
             }
@@ -725,11 +716,11 @@ define_class!(
         }
         #[unsafe(method(showYouTube:))]
         fn action_show_youtube(&self, _sender: Option<&AnyObject>) {
-            self.show_cinema(Mode::YouTube);
+            self.switch_mode(Mode::YouTube);
         }
         #[unsafe(method(showMusic:))]
         fn action_show_music(&self, _sender: Option<&AnyObject>) {
-            self.show_cinema(Mode::Music);
+            self.switch_mode(Mode::Music);
         }
         #[unsafe(method(resumeMusic:))]
         fn action_resume_music(&self, _sender: Option<&AnyObject>) {
@@ -791,7 +782,6 @@ define_class!(
         }
         #[unsafe(method(goBack:))]
         fn action_back(&self, _sender: Option<&AnyObject>) {
-            self.ivars().home_visible.set(false);
             self.set_queue_visible(false);
             if let Some(pane) = self.active() {
                 unsafe { pane.web.goBack() };
@@ -800,7 +790,6 @@ define_class!(
         }
         #[unsafe(method(goForward:))]
         fn action_forward(&self, _sender: Option<&AnyObject>) {
-            self.ivars().home_visible.set(false);
             self.set_queue_visible(false);
             if let Some(pane) = self.active() {
                 unsafe { pane.web.goForward() };
@@ -809,7 +798,8 @@ define_class!(
         }
         #[unsafe(method(goHome:))]
         fn action_home(&self, _sender: Option<&AnyObject>) {
-            self.show_cinema(self.ivars().mode.get());
+            let mode = self.ivars().mode.get();
+            self.load_in(mode, mode.home());
         }
         #[unsafe(method(reloadPage:))]
         fn action_reload(&self, _sender: Option<&AnyObject>) {
@@ -859,10 +849,6 @@ impl AppDelegate {
             window: OnceCell::new(),
             panes: OnceCell::new(),
             mode: Cell::new(Mode::YouTube),
-            cinema: OnceCell::new(),
-            cinema_document: OnceCell::new(),
-            cinema_ready: Cell::new(false),
-            home_visible: Cell::new(true),
             bar: OnceCell::new(),
             queue_panel: OnceCell::new(),
             queue_scrim: OnceCell::new(),
@@ -925,6 +911,10 @@ impl AppDelegate {
         window.setAppearance(
             NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }).as_deref(),
         );
+        // An empty toolbar only sizes the titlebar row the Cinema bar sits in.
+        let toolbar = NSToolbar::new(mtm);
+        window.setToolbar(Some(&toolbar));
+        window.setToolbarStyle(NSWindowToolbarStyle::Unified);
         self.build_menus();
 
         let content = NSView::new(mtm);
@@ -977,9 +967,10 @@ impl AppDelegate {
         let safe = content.safeAreaLayoutGuide();
         content.addSubview(&container);
         ui::activate(&[
+            // The bar shares the (empty, unified) toolbar row with the traffic lights.
             bar.root
                 .topAnchor()
-                .constraintEqualToAnchor(&safe.topAnchor()),
+                .constraintEqualToAnchor(&content.topAnchor()),
             bar.root
                 .leadingAnchor()
                 .constraintEqualToAnchor(&content.leadingAnchor()),
@@ -1009,26 +1000,6 @@ impl AppDelegate {
             container.addSubview(&pane.web);
         }
         let _ = self.ivars().bar.set(bar);
-        if let Some((home, document)) = self.build_cinema() {
-            home.web.setTranslatesAutoresizingMaskIntoConstraints(false);
-            container.addSubview(&home.web);
-            ui::activate(&[
-                home.web
-                    .topAnchor()
-                    .constraintEqualToAnchor(&container.topAnchor()),
-                home.web
-                    .bottomAnchor()
-                    .constraintEqualToAnchor(&container.bottomAnchor()),
-                home.web
-                    .leadingAnchor()
-                    .constraintEqualToAnchor(&container.leadingAnchor()),
-                home.web
-                    .trailingAnchor()
-                    .constraintEqualToAnchor(&container.trailingAnchor()),
-            ]);
-            self.ivars().cinema_document.set(document).ok();
-            self.ivars().cinema.set(home).ok();
-        }
         let _ = self.ivars().container.set(container.clone());
         let _ = self.ivars().backdrop.set(backdrop);
         content.addSubview(&placeholder.root);
@@ -1194,130 +1165,7 @@ impl AppDelegate {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let initial = args.join(" ");
         if initial.trim().is_empty() || !self.navigate(&initial) {
-            self.show_cinema(Mode::YouTube);
-        }
-    }
-
-    fn build_cinema(&self) -> Option<(Pane, Url)> {
-        let executable = std::env::current_exe().ok()?;
-        let directory = executable.parent()?.parent()?.join("Resources/cinema");
-        let document = Url::from_file_path(directory.join("index.html")).ok()?;
-        let resource_url = Url::from_directory_path(&directory).ok()?;
-        let document_nsurl = NSURL::URLWithString(&ns(document.as_str()))?;
-        let resource_nsurl = NSURL::URLWithString(&ns(resource_url.as_str()))?;
-        let config = unsafe { WKWebViewConfiguration::new(self.mtm()) };
-        unsafe {
-            config.setWebsiteDataStore(&WKWebsiteDataStore::nonPersistentDataStore(self.mtm()));
-            config.userContentController().addScriptMessageHandler_name(
-                ProtocolObject::from_ref(self),
-                &ns(cinema::MESSAGE_HANDLER),
-            );
-        }
-        let web = unsafe {
-            WKWebView::initWithFrame_configuration(
-                WKWebView::alloc(self.mtm()),
-                NSRect::ZERO,
-                &config,
-            )
-        };
-        unsafe {
-            web.setNavigationDelegate(Some(ProtocolObject::from_ref(self)));
-            web.setUnderPageBackgroundColor(Some(&cinema_bar::background_color()));
-            web.loadFileURL_allowingReadAccessToURL(&document_nsurl, &resource_nsurl);
-        }
-        Some((Pane::new(web), document))
-    }
-
-    fn is_cinema(&self, web: &WKWebView) -> bool {
-        self.ivars()
-            .cinema
-            .get()
-            .is_some_and(|home| std::ptr::eq(&*home.web, web))
-    }
-
-    fn on_cinema_message(&self, message: &WKScriptMessage, body: &AnyObject) {
-        let Some(expected) = self.ivars().cinema_document.get() else {
-            return;
-        };
-        let frame = unsafe { message.frameInfo() };
-        let actual = unsafe { frame.request() }
-            .URL()
-            .and_then(|url| url.absoluteString())
-            .and_then(|url| Url::parse(&url.to_string()).ok());
-        if unsafe { message.name() }.to_string() != cinema::MESSAGE_HANDLER
-            || !actual.is_some_and(|actual| {
-                cinema::accepts_document(&actual, expected, unsafe { frame.isMainFrame() })
-            })
-        {
-            return;
-        }
-        let action = body
-            .downcast_ref::<NSString>()
-            .and_then(|text| serde_json::from_str::<cinema::Action>(&text.to_string()).ok());
-        match action {
-            Some(cinema::Action::Ready {}) => {
-                self.ivars().cinema_ready.set(true);
-                if let Some(home) = self.ivars().cinema.get() {
-                    home.loaded.set(true);
-                }
-                self.refresh_home();
-                self.show_active_pane();
-            }
-            Some(cinema::Action::Open { url }) => {
-                if let Ok(Navigation::Page(url) | Navigation::Video(url)) = parse_input(&url) {
-                    self.load_url(url.as_str());
-                }
-            }
-            Some(cinema::Action::Resume {}) => self.switch_mode(self.ivars().mode.get()),
-            Some(cinema::Action::Queue {}) => self.set_queue_visible(true),
-            Some(cinema::Action::Save {}) => self.save_current_video(),
-            None => {}
-        }
-    }
-
-    fn refresh_home(&self) {
-        let ivars = self.ivars();
-        if !ivars.home_visible.get() || !ivars.cinema_ready.get() {
-            return;
-        }
-        let Some(home) = ivars.cinema.get() else {
-            return;
-        };
-        let url = self.current_video_url();
-        let title = url
-            .as_ref()
-            .and_then(|url| self.current_title_for(url))
-            .unwrap_or_else(|| "YouTube video".to_owned());
-        let queue = ivars.queue.borrow();
-        let track = ivars.track.borrow();
-        let current = url.as_ref().and_then(|url| {
-            let saved = queue
-                .as_ref()
-                .is_ok_and(|state| state.position(url).is_some());
-            cinema::Current::new(url, &title, saved)
-        });
-        run_js(
-            &home.web,
-            &cinema::state_script(ivars.mode.get(), &queue, &track, current),
-        );
-    }
-
-    fn show_cinema(&self, mode: Mode) {
-        self.exit_video_fullscreen(false);
-        let ivars = self.ivars();
-        ivars.mode.set(mode);
-        ivars.home_visible.set(true);
-        self.set_queue_visible(false);
-        if let Some(bar) = ivars.bar.get() {
-            bar.set_mode(mode);
-            bar.search.setStringValue(ns_string!(""));
-        }
-        self.refresh_home();
-        self.show_active_pane();
-        self.update_backdrop();
-        self.update_now_playing();
-        if let Some(window) = ivars.window.get() {
-            window.setTitle(&ns(&format!("DooTube — {}", mode.label())));
+            self.switch_mode(Mode::YouTube);
         }
     }
 
@@ -1601,7 +1449,7 @@ impl AppDelegate {
                 None,
                 Some(mine("Back", sel!(goBack:), "[")),
                 Some(mine("Forward", sel!(goForward:), "]")),
-                Some(mine("Cinema Home", sel!(goHome:), "H")),
+                Some(mine("Home", sel!(goHome:), "H")),
                 Some(mine("Reload Page", sel!(reloadPage:), "r")),
                 None,
                 Some(with_mods(
@@ -1693,7 +1541,6 @@ impl AppDelegate {
         }
         let ivars = self.ivars();
         ivars.mode.set(mode);
-        ivars.home_visible.set(false);
         self.set_queue_visible(false);
         if let Some(bar) = ivars.bar.get() {
             bar.set_mode(mode);
@@ -1741,7 +1588,6 @@ impl AppDelegate {
         }
         *ivars.track.borrow_mut() = track;
         self.update_now_playing();
-        self.refresh_home();
     }
 
     /// Shows downloaded artwork if it still belongs to the current track.
@@ -1822,13 +1668,10 @@ impl AppDelegate {
     /// Matches the content background, and with it the strip behind the toolbar, to the active page.
     fn update_backdrop(&self) {
         if let Some(backdrop) = self.ivars().backdrop.get() {
-            let color = if self.ivars().home_visible.get() {
-                cinema_bar::background_color()
-            } else {
-                self.active()
-                    .map(|pane| unsafe { pane.web.underPageBackgroundColor() })
-                    .unwrap_or_else(cinema_bar::background_color)
-            };
+            let color = self
+                .active()
+                .map(|pane| unsafe { pane.web.underPageBackgroundColor() })
+                .unwrap_or_else(cinema_bar::background_color);
             backdrop.setFillColor(&color);
         }
     }
@@ -1837,20 +1680,12 @@ impl AppDelegate {
     fn show_active_pane(&self) {
         let active_mode = self.ivars().mode.get();
         let ivars = self.ivars();
-        let at_home = ivars.home_visible.get();
-        if let Some(bar) = ivars.bar.get() {
-            bar.set_player_visible(!at_home);
-        }
-        if let Some(home) = ivars.cinema.get() {
-            home.web.setHidden(!at_home);
-        }
         if let Some(root) = ivars.window.get().and_then(|window| window.contentView()) {
             root.layoutSubtreeIfNeeded();
         }
         for mode in Mode::ALL {
             if let Some(pane) = self.pane(mode) {
-                if !at_home
-                    && mode == active_mode
+                if mode == active_mode
                     && let Some(container) = ivars.container.get()
                     && unsafe { pane.web.superview() }
                         .is_some_and(|parent| std::ptr::eq(&*parent, &**container))
@@ -1863,25 +1698,8 @@ impl AppDelegate {
                     }
                 }
                 pane.web
-                    .setHidden(at_home || mode != active_mode || !pane.loaded.get());
+                    .setHidden(mode != active_mode || !pane.loaded.get());
             }
-        }
-        if at_home {
-            if let Some(placeholder) = ivars.placeholder.get() {
-                match ivars.cinema.get() {
-                    Some(home) if home.failed.get() => placeholder.show_failure(
-                        "exclamationmark.triangle", "Can't Open Cinema",
-                        "Press Try Again. If this persists, rebuild DooTube with scripts/build-app.sh.",
-                    ),
-                    Some(_) if ivars.cinema_ready.get() => placeholder.hide(),
-                    Some(_) => placeholder.show_loading("Opening Cinema"),
-                    None => placeholder.show_failure(
-                        "exclamationmark.triangle", "Cinema Is Missing",
-                        "Rebuild DooTube with scripts/build-app.sh to include its bundled interface.",
-                    ),
-                }
-            }
-            return;
         }
         let (Some(pane), Some(placeholder)) = (self.active(), self.ivars().placeholder.get())
         else {
@@ -1924,7 +1742,6 @@ impl AppDelegate {
         }
         if mode == self.ivars().mode.get() {
             self.update_window_title();
-            self.refresh_home();
         }
     }
 
@@ -2150,7 +1967,6 @@ impl AppDelegate {
         if let Some(bar) = self.ivars().bar.get() {
             bar.set_queue_count(self.with_state(|state| state.up_next.len()).unwrap_or(0));
         }
-        self.refresh_home();
     }
 
     /// The current section's destination for a page, if any.
@@ -2400,7 +2216,6 @@ impl AppDelegate {
         self.sync_sidebar_selection();
         self.update_toolbar();
         self.update_window_title();
-        self.refresh_home();
     }
 
     fn on_page_title_changed(&self, web: &WKWebView) {
@@ -2415,7 +2230,6 @@ impl AppDelegate {
             return;
         }
         self.update_window_title();
-        self.refresh_home();
         // Fill in titles for videos saved before their title was known.
         if let Some(url) = self.current_video_url()
             && let Some(title) = self.current_title_for(&url)
@@ -2433,9 +2247,6 @@ impl AppDelegate {
     }
 
     fn update_window_title(&self) {
-        if self.ivars().home_visible.get() {
-            return;
-        }
         let (Some(window), Some(pane)) = (self.ivars().window.get(), self.active()) else {
             return;
         };
@@ -2667,23 +2478,6 @@ impl AppDelegate {
         web_view: &WKWebView,
         action: &WKNavigationAction,
     ) -> WKNavigationActionPolicy {
-        if self.is_cinema(web_view) {
-            let target = unsafe { action.request() }
-                .URL()
-                .and_then(|url| url.absoluteString())
-                .and_then(|url| Url::parse(&url.to_string()).ok());
-            let main_frame =
-                unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() });
-            return if self.ivars().cinema_document.get().is_some_and(|expected| {
-                target
-                    .as_ref()
-                    .is_some_and(|actual| cinema::accepts_document(actual, expected, main_frame))
-            }) {
-                WKNavigationActionPolicy::Allow
-            } else {
-                WKNavigationActionPolicy::Cancel
-            };
-        }
         let request = unsafe { action.request() };
         let target = request.URL();
         let frame = unsafe { action.targetFrame() };
@@ -2807,7 +2601,6 @@ impl AppDelegate {
     }
 
     fn load_in(&self, mode: Mode, url: &str) {
-        self.ivars().home_visible.set(false);
         self.set_queue_visible(false);
         let Some(pane) = self.pane(mode) else {
             return;
@@ -2830,10 +2623,6 @@ impl AppDelegate {
     }
 
     fn reload_page(&self) {
-        if self.ivars().home_visible.get() {
-            self.reload_cinema();
-            return;
-        }
         self.reload_in(self.ivars().mode.get());
     }
 
@@ -2858,39 +2647,11 @@ impl AppDelegate {
         self.load_in(mode, &url);
     }
 
-    fn reload_cinema(&self) {
-        if let Some(home) = self.ivars().cinema.get() {
-            home.failed.set(false);
-            home.stopped.set(false);
-            self.ivars().cinema_ready.set(false);
-            unsafe { home.web.reload() };
-            self.show_active_pane();
-        }
-    }
-
     /// WebKit ended a page's web process: it crashed, or macOS reclaimed its memory. Like Safari,
     /// the page reloads on its own (a section in the background when it is next shown). If it
     /// ends again within a minute, the section shows a Try Again state instead of reloading in a
     /// loop.
     fn on_web_process_ended(&self, web: &WKWebView) {
-        if self.is_cinema(web) {
-            if let Some(home) = self.ivars().cinema.get() {
-                home.loaded.set(false);
-                self.ivars().cinema_ready.set(false);
-                let now = Instant::now();
-                if home
-                    .ended_at
-                    .replace(Some(now))
-                    .is_some_and(|last| now.duration_since(last) < Duration::from_secs(60))
-                {
-                    home.failed.set(true);
-                } else {
-                    unsafe { home.web.reload() };
-                }
-                self.show_active_pane();
-            }
-            return;
-        }
         let Some(mode) = self.mode_of(web) else {
             return;
         };
@@ -2925,15 +2686,6 @@ impl AppDelegate {
     }
 
     fn on_load_error(&self, web: &WKWebView, error: &NSError) {
-        if self.is_cinema(web) {
-            if error.code() != -999
-                && let Some(home) = self.ivars().cinema.get()
-            {
-                home.failed.set(true);
-                self.show_active_pane();
-            }
-            return;
-        }
         let domain = error.domain().to_string();
         // Cancelled loads and loads stopped by the navigation policy are not failures.
         if error.code() == -999 || (domain == "WebKitErrorDomain" && error.code() == 102) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-10-29
+
+Locally installed at `/Applications/DooTube.app`. The published GitHub release remains 0.2.3.
+
+- Back to a YouTube-like app: DooTube opens straight into YouTube's own home feed, and the YouTube and YouTube Music guides (Home, Shorts, Subscriptions, You; Home, Explore, Library) are shown again. Only the sites' headers stay hidden.
+- Removed Cinema Home and its local web view, font, and assets; one less web process at launch. The brand button and ⇧⌘H open the section's provider home.
+- The native bar is one 52-point row in the titlebar, beside the traffic lights: Back/Forward, sections, centered search, Save, PiP, Up Next, and account. It is clear over the page color; window and drawer colors follow YouTube's dark theme. The Up Next count hides when the queue is empty.
+
 ## 0.3.0 — 2026-10-25
 
 Locally installed at `/Applications/DooTube.app` after clean checks and signature verification. The published GitHub release remains 0.2.3; no 0.3.0 public download has been published.
