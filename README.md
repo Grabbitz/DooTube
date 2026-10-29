@@ -8,8 +8,6 @@ A native Mac app for YouTube and YouTube Music. Rust + AppKit chrome around the 
 
 Get **DooTube.dmg** from the [latest release](../../releases/latest) and drag it to Applications. Requires an Apple silicon Mac with macOS 14.2 or later.
 
-The published GitHub release is **0.2.3**. The features below describe **0.4.0**, installed locally at `/Applications/DooTube.app`; no 0.4.0 public download has been published.
-
 The app isn't notarized, so macOS blocks the first launch. Open System Settings → Privacy & Security and click **Open Anyway**, or run:
 
 ```sh

@@ -2,7 +2,7 @@
 
 ## 0.4.0 — 2026-10-29
 
-Locally installed at `/Applications/DooTube.app`. The published GitHub release remains 0.2.3.
+Published on GitHub; it also carries the unpublished 0.3.0 changes below.
 
 - Back to a YouTube-like app: DooTube opens straight into YouTube's own home feed, and the YouTube and YouTube Music guides (Home, Shorts, Subscriptions, You; Home, Explore, Library) are shown again. Only the sites' headers stay hidden.
 - Removed Cinema Home and its local web view, font, and assets; one less web process at launch. The brand button and ⇧⌘H open the section's provider home.
