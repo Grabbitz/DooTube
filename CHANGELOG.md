@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-10-31
 
+- Signing out now updates the account button: DooTube checks YouTube's `SAPISID` session cookie instead of `LOGIN_INFO`, which YouTube keeps after sign-out.
+- Playback speed up to 4×: Controls → Speed Up (⌥⌘.), Slow Down (⌥⌘,), and Normal Speed (⌥⌘0). The chosen speed carries over to the next video.
+- Shorts shelves are hidden in Home, Subscriptions, and search. The guide's Shorts entry still opens Shorts.
+- The Dock icon shows how many videos are in Up Next.
+- No more system beep for player keys YouTube handles, such as T (theater) and F (full screen).
 - Licensed under MIT.
 - CI on GitHub Actions (macOS): format, Clippy, and tests on every push and pull request.
 - `scripts/make-dmg.sh` also writes `DooTube.dmg.sha256` for the release page.
