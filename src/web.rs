@@ -427,6 +427,25 @@ pub fn toggle_pip_script() -> String {
     )
 }
 
+/// Steps the playing (or first loaded) video's speed by `delta`, past YouTube's own 2× cap;
+/// a `delta` of 0 resets to normal. Returns the new rate, or 0 when there is no video.
+pub fn change_speed_script(delta: f64) -> String {
+    format!(
+        r#"(() => {{
+  const videos = [...document.querySelectorAll("video")].filter((video) => video.readyState > 0);
+  const video = videos.find((video) => !video.paused) || videos[0];
+  if (!video) return 0;
+  const delta = {delta};
+  video.playbackRate = delta === 0 ? 1
+    : Math.min(4, Math.max(0.25, Math.round((video.playbackRate + delta) * 4) / 4));
+  // The page script reapplies this speed to each new video.
+  if (video.playbackRate === 1) localStorage.removeItem("dootubeRate");
+  else localStorage.setItem("dootubeRate", video.playbackRate);
+  return video.playbackRate;
+}})()"#
+    )
+}
+
 /// Document-start script: hides the site chrome DooTube replaces and reports audible playback.
 pub fn page_script() -> String {
     let youtube_css = serde_json::to_string(include_str!("youtube_chrome.css")).expect("string");
@@ -450,6 +469,15 @@ pub fn page_script() -> String {
   }};
   document.addEventListener("playing", report, true);
   document.addEventListener("volumechange", report, true);
+  // Keeps the speed chosen with DooTube's Speed Up / Slow Down once YouTube loads the next video.
+  let rateSource = "";
+  document.addEventListener("playing", (event) => {{
+    const media = event.target;
+    const rate = Number(localStorage.getItem("dootubeRate"));
+    if (!(media instanceof HTMLMediaElement) || !rate || media.currentSrc === rateSource) return;
+    rateSource = media.currentSrc;
+    media.playbackRate = rate;
+  }}, true);
   document.addEventListener("enterpictureinpicture", () => post({{ type: "pip", active: true }}), true);
   document.addEventListener("leavepictureinpicture", () => post({{ type: "pip", active: false }}), true);
   if (["www.youtube.com", "youtube.com", "m.youtube.com"].includes(host)) {{

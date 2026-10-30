@@ -753,6 +753,18 @@ define_class!(
         fn action_music_play_pause(&self, _sender: Option<&AnyObject>) {
             self.music_control("playpause");
         }
+        #[unsafe(method(speedUp:))]
+        fn action_speed_up(&self, _sender: Option<&AnyObject>) {
+            self.change_speed(0.25);
+        }
+        #[unsafe(method(slowDown:))]
+        fn action_slow_down(&self, _sender: Option<&AnyObject>) {
+            self.change_speed(-0.25);
+        }
+        #[unsafe(method(normalSpeed:))]
+        fn action_normal_speed(&self, _sender: Option<&AnyObject>) {
+            self.change_speed(0.);
+        }
         #[unsafe(method(musicNext:))]
         fn action_music_next(&self, _sender: Option<&AnyObject>) {
             self.music_control("next");

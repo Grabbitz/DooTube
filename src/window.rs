@@ -587,6 +587,19 @@ impl AppDelegate {
                 None,
                 Some(mine("Next", sel!(musicNext:), "\u{F703}")),
                 Some(mine("Previous", sel!(musicPrevious:), "\u{F702}")),
+                None,
+                Some(with_mods(
+                    mine("Speed Up", sel!(speedUp:), "."),
+                    NSEventModifierFlags::Option | NSEventModifierFlags::Command,
+                )),
+                Some(with_mods(
+                    mine("Slow Down", sel!(slowDown:), ","),
+                    NSEventModifierFlags::Option | NSEventModifierFlags::Command,
+                )),
+                Some(with_mods(
+                    mine("Normal Speed", sel!(normalSpeed:), "0"),
+                    NSEventModifierFlags::Option | NSEventModifierFlags::Command,
+                )),
             ],
         );
         let option_command = NSEventModifierFlags::Option | NSEventModifierFlags::Command;

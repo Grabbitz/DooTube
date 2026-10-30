@@ -183,9 +183,14 @@ impl AppDelegate {
         }
         self.sync_sidebar_selection();
         self.update_toolbar();
+        let count = self.with_state(|state| state.up_next.len()).unwrap_or(0);
         if let Some(bar) = self.ivars().bar.get() {
-            bar.set_queue_count(self.with_state(|state| state.up_next.len()).unwrap_or(0));
+            bar.set_queue_count(count);
         }
+        let badge = (count > 0).then(|| ns(&count.to_string()));
+        NSApplication::sharedApplication(self.mtm())
+            .dockTile()
+            .setBadgeLabel(badge.as_deref());
     }
 
     /// The current section's destination for a page, if any.

@@ -31,6 +31,9 @@ xattr -dr com.apple.quarantine /Applications/DooTube.app
 - **Now Playing**: the drawer offers Music controls while browsing YouTube. The Controls and Dock menus remain available.
 - **Video full screen**: press F and the video zooms out to fill the screen. Press F or Esc to zoom back.
 - **Picture in Picture** (⌃⌘P). Keeps playing while the app is hidden.
+- **Playback speed up to 4×** (⌥⌘. / ⌥⌘,), kept for the next video. ⌥⌘0 returns to normal.
+- **No Shorts shelves** in Home, Subscriptions, or search. The guide's Shorts entry still opens them.
+- **Dock badge** shows how many videos are in Up Next.
 
 | Shortcut | Action |
 | --- | --- |
@@ -42,6 +45,8 @@ xattr -dr com.apple.quarantine /Applications/DooTube.app
 | ⌘← / ⌘→ | Music: Previous / Next |
 | ⌃⌘S | Toggle Up Next |
 | ⌃⌘F | Window full screen |
+| ⌥⌘. / ⌥⌘, | Speed up / Slow down |
+| ⌥⌘0 | Normal speed |
 
 ## Build from source
 

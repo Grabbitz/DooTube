@@ -276,4 +276,28 @@ impl AppDelegate {
                 .evaluateJavaScript_completionHandler(&ns(&web::toggle_pip_script()), Some(&block));
         }
     }
+
+    /// Changes the active section's video speed and reports the new rate.
+    pub(crate) fn change_speed(&self, delta: f64) {
+        let Some(pane) = self.active() else {
+            return;
+        };
+        let this = self.retain();
+        let block = RcBlock::new(move |result: *mut AnyObject, _error: *mut NSError| {
+            let rate = unsafe { result.as_ref() }
+                .and_then(|result| result.downcast_ref::<NSNumber>())
+                .map_or(0., |rate| rate.doubleValue());
+            if rate > 0. {
+                this.show_notice(&format!("Speed {rate}×"));
+            } else {
+                this.show_notice("Open a video to change its speed.");
+            }
+        });
+        unsafe {
+            pane.web.evaluateJavaScript_completionHandler(
+                &ns(&web::change_speed_script(delta)),
+                Some(&block),
+            );
+        }
+    }
 }

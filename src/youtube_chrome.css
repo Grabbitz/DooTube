@@ -1,6 +1,7 @@
 /*
  * DooTube's native bar replaces YouTube's website masthead (search, account, logo).
  * YouTube's own guide (Home, Shorts, Subscriptions, You) stays, as on youtube.com.
+ * Shorts shelves are hidden from feeds and search; the guide's Shorts entry still opens them.
  * The official player, its controls, branding, ads, captions, and page content are untouched.
  */
 #masthead-container {
@@ -30,4 +31,13 @@ tp-yt-app-drawer#guide #header {
 /* The frosted backdrop spans masthead + chip bar; shift it up by the hidden masthead height. */
 #frosted-glass {
   top: -56px !important;
+}
+
+/* Shorts shelves and Shorts items in Home, Subscriptions, and search results. */
+ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
+ytd-reel-shelf-renderer,
+grid-shelf-view-model:has(ytm-shorts-lockup-view-model),
+ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+ytd-video-renderer:has(a[href^="/shorts/"]) {
+  display: none !important;
 }
