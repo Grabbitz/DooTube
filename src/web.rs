@@ -530,6 +530,16 @@ fn fullscreen_shim_script() -> String {
       z-index: 2147483647 !important;
       background: #000 !important;
     }
+    /* One seamless black field around the picture: the page's #0f0f0f and the ambient-mode
+       glow would otherwise show as grey bands above and below a letterboxed video. */
+    :root.dootube-fullscreen, :root.dootube-fullscreen body, :root.dootube-fullscreen ytd-app,
+    :root.dootube-fullscreen #full-bleed-container, :root.dootube-fullscreen #player-full-bleed-container,
+    :root.dootube-fullscreen .html5-video-player, :root.dootube-fullscreen .html5-video-container {
+      background: #000 !important;
+    }
+    :root.dootube-fullscreen #cinematics, :root.dootube-fullscreen #cinematics-container {
+      display: none !important;
+    }
     :root.dootube-fullscreen, :root.dootube-fullscreen body {
       overflow: hidden !important;
       scrollbar-width: none !important;
