@@ -5,19 +5,20 @@ use super::*;
 impl AppDelegate {
     pub(crate) fn build_window(&self) {
         let mtm = self.mtm();
-        let window = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm),
-                NSRect::new(NSPoint::new(0., 0.), NSSize::new(1180., 760.)),
-                NSWindowStyleMask::Titled
+        let window: Retained<QuietWindow> = unsafe {
+            msg_send![
+                QuietWindow::alloc(mtm),
+                initWithContentRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(1180., 760.)),
+                styleMask: NSWindowStyleMask::Titled
                     | NSWindowStyleMask::Closable
                     | NSWindowStyleMask::Miniaturizable
                     | NSWindowStyleMask::Resizable
                     | NSWindowStyleMask::FullSizeContentView,
-                NSBackingStoreType::Buffered,
-                false,
-            )
+                backing: NSBackingStoreType::Buffered,
+                defer: false
+            ]
         };
+        let window = window.into_super();
         unsafe { window.setReleasedWhenClosed(false) };
         window.setTitle(ns_string!("DooTube"));
         window.setTitleVisibility(NSWindowTitleVisibility::Hidden);

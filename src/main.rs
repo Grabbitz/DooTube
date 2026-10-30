@@ -23,7 +23,7 @@ use dispatch2::DispatchQueue;
 use objc2::{
     AllocAnyThread, ClassType, DefinedClass, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, ProtocolObject},
+    runtime::{AnyObject, ProtocolObject, Sel},
     sel,
 };
 use objc2_app_kit::{
@@ -187,8 +187,36 @@ struct AppIvars {
 const STAGE_ZOOM_SECONDS: f64 = 0.32;
 
 define_class!(
-    /// Borderless screen-sized window that shows only the video during page fullscreen.
+    /// Window that doesn't beep for keys a web page already acted on.
     #[unsafe(super(NSWindow, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct QuietWindow;
+
+    impl QuietWindow {
+        // WebKit hands every key the page didn't cancel back up the responder chain; YouTube acts
+        // on T, F, and other player keys without cancelling them, so AppKit would beep for each.
+        #[unsafe(method(noResponderFor:))]
+        fn no_responder_for(&self, selector: Sel) {
+            let mut view = self
+                .firstResponder()
+                .and_then(|responder| responder.downcast::<NSView>().ok());
+            while let Some(current) = view {
+                if current.isKindOfClass(WKWebView::class()) {
+                    if selector == sel!(keyDown:) {
+                        return;
+                    }
+                    break;
+                }
+                view = unsafe { current.superview() };
+            }
+            unsafe { msg_send![super(self), noResponderFor: selector] }
+        }
+    }
+);
+
+define_class!(
+    /// Borderless screen-sized window that shows only the video during page fullscreen.
+    #[unsafe(super(QuietWindow, NSWindow, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     struct StageWindow;
 
