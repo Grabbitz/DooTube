@@ -76,6 +76,7 @@ impl AppDelegate {
         }
         bar.search.setSendsWholeSearchString(true);
         unsafe {
+            bar.search.setDelegate(Some(ProtocolObject::from_ref(self)));
             bar.search.setTarget(Some(self));
             bar.search.setAction(Some(sel!(searchSubmitted:)));
         }
@@ -115,11 +116,19 @@ impl AppDelegate {
             pane.web.setTranslatesAutoresizingMaskIntoConstraints(true);
             container.addSubview(&pane.web);
         }
+        let suggestions = suggestions::Suggestions::new(mtm, &content, &bar.search);
         let _ = self.ivars().bar.set(bar);
         let _ = self.ivars().container.set(container.clone());
         let _ = self.ivars().backdrop.set(backdrop);
         content.addSubview(&placeholder.root);
         content.addSubview(&notice.root);
+        // Above the page and the overlays added before it.
+        content.addSubview_positioned_relativeTo(
+            &suggestions.root,
+            NSWindowOrderingMode::Above,
+            None,
+        );
+        let _ = self.ivars().suggestions.set(suggestions);
         ui::activate(&[
             placeholder
                 .root

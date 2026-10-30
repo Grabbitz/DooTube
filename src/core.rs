@@ -352,9 +352,46 @@ fn save_state_at(state: &AppState, path: &Path) -> std::io::Result<()> {
     fs::rename(temp, path)
 }
 
+/// YouTube's search suggestions for `query` (the public suggest service, as YouTube's own box uses).
+pub fn suggestions_url(query: &str) -> Url {
+    Url::parse_with_params(
+        "https://suggestqueries.google.com/complete/search",
+        [
+            ("client", "firefox"),
+            ("ds", "yt"),
+            ("oe", "utf-8"),
+            ("q", query),
+        ],
+    )
+    .expect("static URL")
+}
+
+/// The query a suggest reply answers and its suggestions: `["query", ["a", "b", ...], ...]`.
+pub fn parse_suggestions(bytes: &[u8]) -> Option<(String, Vec<String>)> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let query = value.get(0)?.as_str()?.to_owned();
+    let items = value
+        .get(1)?
+        .as_array()?
+        .iter()
+        .filter_map(|item| item.as_str().map(str::to_owned))
+        .collect();
+    Some((query, items))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_suggest_replies() {
+        let reply = r#"["ไม่ทัน",["ไม่ทันแล","ไม่ทันบอกลา"],[],{"google:suggestsubtypes":[[3]]}]"#;
+        assert_eq!(
+            parse_suggestions(reply.as_bytes()),
+            Some(("ไม่ทัน".into(), vec!["ไม่ทันแล".into(), "ไม่ทันบอกลา".into()]))
+        );
+        assert_eq!(parse_suggestions(b"<html>"), None);
+        assert!(suggestions_url("a b&c").as_str().ends_with("q=a+b%26c"));
+    }
     #[test]
     fn accepts_search_and_supported_youtube_pages_and_video_links() {
         assert_eq!(

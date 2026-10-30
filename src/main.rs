@@ -10,6 +10,7 @@ mod page_state;
 mod panes;
 mod queue;
 mod sidebar;
+mod suggestions;
 mod ui;
 mod web;
 mod window;
@@ -33,12 +34,13 @@ use objc2_app_kit::{
     NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate, NSDragOperation,
     NSDraggingInfo, NSEventModifierFlags, NSEventType, NSFont, NSImage, NSImageScaling,
     NSImageView, NSMenu, NSMenuItem, NSPasteboardItem, NSPasteboardTypeURL, NSPasteboardWriting,
-    NSResponder, NSScrollView, NSStackView, NSTableColumn, NSTableColumnResizingOptions,
-    NSTableView, NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewDropOperation, NSTableViewStyle, NSText, NSTextField, NSTitlePosition, NSToolbar,
-    NSUserInterfaceLayoutOrientation, NSView, NSViewFrameDidChangeNotification, NSWindow,
-    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask,
-    NSWindowTitleVisibility, NSWindowToolbarStyle, NSWorkspace,
+    NSResponder, NSScrollView, NSSearchFieldDelegate, NSStackView, NSTableColumn,
+    NSTableColumnResizingOptions, NSTableView, NSTableViewColumnAutoresizingStyle,
+    NSTableViewDataSource, NSTableViewDelegate, NSTableViewDropOperation, NSTableViewStyle, NSText,
+    NSTextField, NSTextFieldDelegate, NSTitlePosition, NSToolbar, NSUserInterfaceLayoutOrientation,
+    NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowCollectionBehavior,
+    NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSError, NSHTTPCookie, NSIndexSet, NSInteger,
@@ -134,6 +136,7 @@ struct AppIvars {
     panes: OnceCell<[Pane; 2]>,
     mode: Cell<Mode>,
     bar: OnceCell<cinema_bar::CinemaBar>,
+    suggestions: OnceCell<suggestions::Suggestions>,
     queue_panel: OnceCell<Retained<NSBox>>,
     queue_scrim: OnceCell<Retained<NSBox>>,
     account_menu: RefCell<Option<Retained<NSMenu>>>,
@@ -663,7 +666,27 @@ define_class!(
         }
     }
 
-    unsafe impl NSControlTextEditingDelegate for AppDelegate {}
+    unsafe impl NSControlTextEditingDelegate for AppDelegate {
+        #[unsafe(method(controlTextDidChange:))]
+        fn control_text_did_change(&self, _notification: &NSNotification) {
+            if let Some(bar) = self.ivars().bar.get() {
+                self.search_text_changed(bar.search.stringValue().to_string());
+            }
+        }
+        #[unsafe(method(controlTextDidEndEditing:))]
+        fn control_text_did_end_editing(&self, _notification: &NSNotification) {
+            self.hide_suggestions();
+        }
+        // NSTextView in AppKit's declaration; only its pointer passes through here.
+        #[unsafe(method(control:textView:doCommandBySelector:))]
+        fn control_do_command(&self, _control: &NSControl, _text_view: &NSText, command: Sel) -> bool {
+            self.search_command(command)
+        }
+    }
+
+    unsafe impl NSTextFieldDelegate for AppDelegate {}
+
+    unsafe impl NSSearchFieldDelegate for AppDelegate {}
 
     unsafe impl NSTableViewDelegate for AppDelegate {
         #[unsafe(method_id(tableView:viewForTableColumn:row:))]
@@ -735,6 +758,7 @@ define_class!(
         #[unsafe(method(searchSubmitted:))]
         fn action_search(&self, sender: &NSControl) {
             let text = sender.stringValue().to_string();
+            self.hide_suggestions();
             if text.trim().is_empty() {
                 return;
             }
@@ -743,6 +767,10 @@ define_class!(
             {
                 window.makeFirstResponder(Some(&pane.web));
             }
+        }
+        #[unsafe(method(suggestionClicked:))]
+        fn action_suggestion(&self, sender: &NSButton) {
+            self.open_suggestion(sender.tag() as usize);
         }
         #[unsafe(method(focusSearch:))]
         fn action_focus_search(&self, _sender: Option<&AnyObject>) {
@@ -899,6 +927,7 @@ impl AppDelegate {
             panes: OnceCell::new(),
             mode: Cell::new(Mode::YouTube),
             bar: OnceCell::new(),
+            suggestions: OnceCell::new(),
             queue_panel: OnceCell::new(),
             queue_scrim: OnceCell::new(),
             account_menu: RefCell::new(None),
