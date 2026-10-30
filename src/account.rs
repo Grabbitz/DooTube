@@ -3,15 +3,15 @@
 use super::*;
 
 impl AppDelegate {
-    /// Reads the shared cookie store: YouTube sets `LOGIN_INFO`/`SAPISID` for a signed-in account.
+    /// Reads the shared cookie store: a signed-in account has a YouTube `SAPISID` session cookie.
+    /// `LOGIN_INFO` is ignored because YouTube keeps it after sign-out to remember the account.
     pub(crate) fn refresh_sign_in_state(&self) {
         let this = self.retain();
         let block = RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
             let cookies = unsafe { cookies.as_ref() };
             let signed_in = cookies.iter().any(|cookie| {
-                let name = cookie.name().to_string();
                 let domain = cookie.domain().to_string();
-                matches!(name.as_str(), "LOGIN_INFO" | "SAPISID")
+                cookie.name().to_string() == "SAPISID"
                     && domain.trim_start_matches('.').ends_with("youtube.com")
             });
             this.set_signed_in(signed_in);
