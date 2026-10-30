@@ -14,6 +14,13 @@ The app isn't notarized, so macOS blocks the first launch. Open System Settings 
 xattr -dr com.apple.quarantine /Applications/DooTube.app
 ```
 
+## Known limitations
+
+- **Apple silicon only**, macOS 14.2 or later.
+- **Not notarized**: macOS blocks the first launch (see above).
+- **No passkeys**: they can't be used in embedded web views, so Google asks for your password or another verification method instead.
+- **Depends on YouTube's page layout**: a YouTube redesign can break the hidden headers and other page tweaks until DooTube is updated.
+
 ## Features
 
 - **YouTube and Music** in separate sections (⌘1 / ⌘2). Only one plays at a time.
@@ -36,8 +43,6 @@ xattr -dr com.apple.quarantine /Applications/DooTube.app
 | ⌃⌘S | Toggle Up Next |
 | ⌃⌘F | Window full screen |
 
-Passkeys can't be used in embedded web views, so Google asks for your password or another verification method instead.
-
 ## Build from source
 
 Requires Rust and Xcode Command Line Tools.
@@ -50,4 +55,4 @@ Requires Rust and Xcode Command Line Tools.
 
 ## More
 
-[Implementation](docs/implementation.md) · [Verification](docs/verification.md) · [Changelog](CHANGELOG.md)
+[Implementation](docs/implementation.md) · [Verification](docs/verification.md) · [Changelog](CHANGELOG.md) · [MIT License](LICENSE)

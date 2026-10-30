@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Licensed under MIT.
+- CI on GitHub Actions (macOS): format, Clippy, and tests on every push and pull request.
+- `scripts/make-dmg.sh` also writes `DooTube.dmg.sha256` for the release page.
+- Split `src/main.rs` into one module per app area (window, panes, sidebar, queue, page state, account, navigation, notices, lifecycle). No behavior change.
+- Removed the leftover Cinema prototype (`design-preview/`, root `tokens.css`).
+
 ## 0.4.0 — 2026-10-29
 
 Published on GitHub; it also carries the unpublished 0.3.0 changes below.

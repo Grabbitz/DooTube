@@ -13,4 +13,6 @@ ln -s /Applications "$STAGING/Applications"
 rm -f "$DMG"
 /usr/bin/hdiutil create -volname DooTube -srcfolder "$STAGING" -fs HFS+ -format UDZO -ov "$DMG"
 /usr/bin/hdiutil verify "$DMG"
+(cd "$(dirname "$DMG")" && shasum -a 256 DooTube.dmg > DooTube.dmg.sha256)
+cat "$DMG.sha256"
 echo "$DMG"
