@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-10-31
+
+- Search suggestions as you type: ↑/↓ to move through them, Enter to search, Escape to close, or click one.
+- Full screen keeps the letterbox pure black: no grey bands from the page background or ambient mode.
+
 ## 0.4.1 — 2026-10-31
 
 - Signing out now updates the account button: DooTube checks YouTube's `SAPISID` session cookie instead of `LOGIN_INFO`, which YouTube keeps after sign-out.
