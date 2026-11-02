@@ -120,12 +120,9 @@ fn label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
     field
 }
 
-fn cell_frame() -> NSRect {
-    NSRect::new(NSPoint::new(0., 0.), NSSize::new(220., 28.))
-}
-
 /// Height of an Up Next row, which shows the video's thumbnail.
 pub const SAVED_ROW_HEIGHT: f64 = 72.;
+pub const EMPTY_ROW_HEIGHT: f64 = 88.;
 const THUMBNAIL_SIZE: NSSize = NSSize::new(72., 44.);
 
 /// A downloaded video thumbnail, prepared once for [`saved_cell`].
@@ -161,12 +158,22 @@ pub fn saved_cell(
         }
     }
     let text = label(mtm, title);
+    text.setMaximumNumberOfLines(2);
     text.setFont(Some(&NSFont::systemFontOfSize_weight(14., unsafe {
         NSFontWeightSemibold
     })));
-    cell.setToolTip(Some(&ns(title)));
+    let kind = if symbol_name == "music.note" {
+        "Music"
+    } else {
+        "YouTube"
+    };
+    let detail = label(mtm, kind);
+    detail.setFont(Some(&NSFont::systemFontOfSize(11.)));
+    detail.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    cell.setToolTip(Some(&ns(&format!("{title} · {kind}"))));
     cell.addSubview(&icon);
     cell.addSubview(&text);
+    cell.addSubview(&detail);
     unsafe {
         // Not the cell's imageView: the source list would tint the thumbnail on selection.
         cell.setTextField(Some(&text));
@@ -184,29 +191,59 @@ pub fn saved_cell(
             .constraintEqualToAnchor_constant(&icon.trailingAnchor(), 8.),
         text.trailingAnchor()
             .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.),
-        text.centerYAnchor()
-            .constraintEqualToAnchor(&cell.centerYAnchor()),
+        text.topAnchor()
+            .constraintEqualToAnchor_constant(&cell.topAnchor(), 10.),
+        detail
+            .leadingAnchor()
+            .constraintEqualToAnchor(&text.leadingAnchor()),
+        detail
+            .trailingAnchor()
+            .constraintEqualToAnchor(&text.trailingAnchor()),
+        detail
+            .topAnchor()
+            .constraintEqualToAnchor_constant(&text.bottomAnchor(), 3.),
+        detail
+            .bottomAnchor()
+            .constraintLessThanOrEqualToAnchor_constant(&cell.bottomAnchor(), -6.),
     ]);
     cell.into_super()
 }
 
 /// Non-selectable explanatory row, used when a section is empty.
 pub fn hint_cell(mtm: MainThreadMarker, text: &str) -> Retained<NSView> {
-    let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), cell_frame());
+    let cell = NSTableCellView::initWithFrame(
+        NSTableCellView::alloc(mtm),
+        NSRect::new(NSPoint::new(0., 0.), NSSize::new(220., EMPTY_ROW_HEIGHT)),
+    );
     let field = label(mtm, text);
+    field.setMaximumNumberOfLines(3);
     field.setFont(Some(&NSFont::systemFontOfSize(14.)));
     field.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    let icon = NSImageView::new(mtm);
+    icon.setTranslatesAutoresizingMaskIntoConstraints(false);
+    icon.setImage(symbol("bookmark", "Up Next").as_deref());
+    icon.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+    cell.addSubview(&icon);
     cell.addSubview(&field);
     activate(&[
+        icon.leadingAnchor()
+            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 8.),
+        icon.topAnchor()
+            .constraintEqualToAnchor_constant(&cell.topAnchor(), 16.),
+        icon.widthAnchor().constraintEqualToConstant(18.),
+        icon.heightAnchor().constraintEqualToConstant(18.),
         field
             .leadingAnchor()
-            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), 30.),
+            .constraintEqualToAnchor_constant(&icon.trailingAnchor(), 10.),
         field
             .trailingAnchor()
             .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.),
         field
-            .centerYAnchor()
-            .constraintEqualToAnchor(&cell.centerYAnchor()),
+            .topAnchor()
+            .constraintEqualToAnchor_constant(&cell.topAnchor(), 12.),
+        field
+            .bottomAnchor()
+            .constraintLessThanOrEqualToAnchor_constant(&cell.bottomAnchor(), -8.),
     ]);
     cell.into_super()
 }

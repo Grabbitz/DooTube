@@ -573,6 +573,12 @@ define_class!(
     }
 
     unsafe impl NSWindowDelegate for AppDelegate {
+        #[unsafe(method(windowDidResize:))]
+        fn window_did_resize(&self, _notification: &NSNotification) {
+            if let Some(bar) = self.ivars().bar.get() {
+                bar.update_width(bar.root.bounds().size.width);
+            }
+        }
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notification: &NSNotification) {
             self.on_window_close();
@@ -702,6 +708,7 @@ define_class!(
         fn height_of_row(&self, table: &NSTableView, row: NSInteger) -> f64 {
             match self.row_at(row) {
                 Some(Row::Saved(_)) => ui::SAVED_ROW_HEIGHT,
+                Some(Row::EmptyHint) => ui::EMPTY_ROW_HEIGHT,
                 _ => table.rowHeight(),
             }
         }

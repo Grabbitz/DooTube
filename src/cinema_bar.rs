@@ -43,6 +43,8 @@ pub struct CinemaBar {
     pub account: Retained<NSButton>,
     pub search: Retained<NSSearchField>,
     count: Retained<NSTextField>,
+    youtube_indicator: Retained<NSBox>,
+    music_indicator: Retained<NSBox>,
 }
 
 /// Height of the bar, which shares its row with the window's traffic lights.
@@ -71,6 +73,8 @@ impl CinemaBar {
 
         let youtube = mode_button(mtm, "YouTube");
         let music = mode_button(mtm, "Music");
+        let youtube_indicator = mode_indicator(mtm);
+        let music_indicator = mode_indicator(mtm);
         let search = NSSearchField::new(mtm);
         search.setPlaceholderString(Some(&ns("Search YouTube")));
         search.setToolTip(Some(&ns("Search YouTube")));
@@ -111,6 +115,8 @@ impl CinemaBar {
         for view in [&left as &NSView, &right, &search] {
             root.addSubview(view);
         }
+        root.addSubview(&youtube_indicator);
+        root.addSubview(&music_indicator);
         let height = root.heightAnchor().constraintEqualToConstant(HEIGHT);
         // The search field stays centered in the window but yields to both sides when narrow.
         let centered = search
@@ -164,6 +170,28 @@ impl CinemaBar {
             count
                 .widthAnchor()
                 .constraintGreaterThanOrEqualToConstant(14.),
+            youtube_indicator
+                .centerXAnchor()
+                .constraintEqualToAnchor(&youtube.centerXAnchor()),
+            youtube_indicator
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&youtube.bottomAnchor(), 3.),
+            youtube_indicator
+                .widthAnchor()
+                .constraintEqualToAnchor(&youtube.widthAnchor()),
+            youtube_indicator
+                .heightAnchor()
+                .constraintEqualToConstant(2.),
+            music_indicator
+                .centerXAnchor()
+                .constraintEqualToAnchor(&music.centerXAnchor()),
+            music_indicator
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&music.bottomAnchor(), 3.),
+            music_indicator
+                .widthAnchor()
+                .constraintEqualToAnchor(&music.widthAnchor()),
+            music_indicator.heightAnchor().constraintEqualToConstant(2.),
         ]);
         let bar = Self {
             root,
@@ -178,6 +206,8 @@ impl CinemaBar {
             account,
             search,
             count,
+            youtube_indicator,
+            music_indicator,
         };
         bar.set_mode(Mode::YouTube);
         bar.set_saved(None);
@@ -190,6 +220,18 @@ impl CinemaBar {
         let (active, inactive) = (ink_color(), NSColor::secondaryLabelColor());
         let youtube_on = matches!(mode, Mode::YouTube);
         let music_on = !youtube_on;
+        self.youtube_indicator.setHidden(!youtube_on);
+        self.music_indicator.setHidden(!music_on);
+        self.youtube.setAccessibilityLabel(Some(&ns(if youtube_on {
+            "YouTube, selected"
+        } else {
+            "YouTube"
+        })));
+        self.music.setAccessibilityLabel(Some(&ns(if music_on {
+            "Music, selected"
+        } else {
+            "Music"
+        })));
         self.youtube
             .setContentTintColor(Some(if youtube_on { &active } else { &inactive }));
         self.music
@@ -205,6 +247,15 @@ impl CinemaBar {
         let placeholder = ns(mode.search_placeholder());
         self.search.setPlaceholderString(Some(&placeholder));
         self.search.setAccessibilityLabel(Some(&placeholder));
+        self.search.setToolTip(Some(&placeholder));
+    }
+
+    /// Preserve space for search at narrow window widths without hiding actions.
+    pub fn update_width(&self, width: f64) {
+        let title = if width < 980. { "" } else { "DooTube" };
+        if self.home.title().to_string() != title {
+            self.home.setTitle(&ns(title));
+        }
     }
 
     pub fn set_saved(&self, saved: Option<bool>) {
@@ -273,6 +324,16 @@ fn mode_button(mtm: MainThreadMarker, title: &str) -> Retained<NSButton> {
     button.setAccessibilityLabel(Some(&ns(title)));
     button.setTranslatesAutoresizingMaskIntoConstraints(false);
     button
+}
+
+fn mode_indicator(mtm: MainThreadMarker) -> Retained<NSBox> {
+    let indicator = NSBox::new(mtm);
+    indicator.setBoxType(NSBoxType::Custom);
+    indicator.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
+    indicator.setBorderWidth(0.);
+    indicator.setFillColor(&ink_color());
+    indicator.setTranslatesAutoresizingMaskIntoConstraints(false);
+    indicator
 }
 
 fn icon_button(mtm: MainThreadMarker, name: &str, description: &str) -> Retained<NSButton> {

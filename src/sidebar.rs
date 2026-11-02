@@ -40,7 +40,7 @@ impl AppDelegate {
             Row::EmptyHint => ui::hint_cell(
                 mtm,
                 if self.with_state(|_| ()).is_some() {
-                    "Save videos with ⌘S"
+                    "Keep videos here for later. Use Save in the toolbar or press ⌘S."
                 } else {
                     "Saved list can't be read"
                 },
