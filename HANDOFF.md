@@ -10,7 +10,7 @@ Updated 2026-11-11. Earlier checkpoints (including the Cinema UI of 0.3.0) are i
 
 ## Where things are
 
-- Published GitHub release: **0.4.2** (2026-10-30 UTC), [release page](https://github.com/Grabbitz/DooTube/releases/tag/v0.4.2). `main` has unreleased work, including toolbar and Up Next usability commit `ce06bfb`; opt-in Up Next auto-play and the YouTube Music menu-bar item are uncommitted.
+- Published GitHub release: **0.4.3** (2026-11-11), [release page](https://github.com/Grabbitz/DooTube/releases/tag/v0.4.3). `main` matches it.
 - 0.4.1 added: sign-out detection by the `SAPISID` cookie (YouTube keeps `LOGIN_INFO` after sign-out), playback speed up to 4× (⌥⌘. / ⌥⌘, / ⌥⌘0) carried over to the next video, hidden Shorts shelves, the Up Next count on the Dock icon, and no system beep for player keys the page handles (`QuietWindow` in `src/main.rs`).
 - Code is one module per app area under `src/` (window, panes, sidebar, queue, page state, account, navigation, notices, lifecycle, status_item). Page scripts and CSS: `src/web.rs`, `src/youtube_chrome.css`, `src/music_chrome.css`, `src/music_player.js`.
 - Current behavior and data boundaries: [docs/implementation.md](docs/implementation.md). Earlier evidence: [docs/verification.md](docs/verification.md).

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — 2026-11-11
 
 - The toolbar underlines the selected YouTube or Music section and keeps more room for search in narrow windows. Up Next rows show longer titles and whether each item is YouTube or Music, and the empty drawer explains how to save a video.
 - Controls → Play Up Next Automatically is opt-in. When a saved, non-live YouTube watch video finishes outside an ad and has a following entry, a five-second countdown offers Play Now and Cancel before opening that entry with its saved resume position. YouTube watch entries continue in the same page; if that navigation is unavailable, the normal opening path may leave playback paused. Escape, native navigation, switching sections, hiding or minimizing the window, and entering video fullscreen cancel the countdown; YouTube's own in-page autoplay does not. Queue entries are not removed or reordered.
