@@ -131,6 +131,7 @@ impl AppDelegate {
     }
 
     pub(crate) fn load_in(&self, mode: Mode, url: &str) {
+        self.cancel_auto_next();
         self.set_queue_visible(false);
         let Some(pane) = self.pane(mode) else {
             return;
@@ -157,6 +158,7 @@ impl AppDelegate {
     }
 
     pub(crate) fn reload_in(&self, mode: Mode) {
+        self.cancel_auto_next();
         let Some(pane) = self.pane(mode) else {
             return;
         };

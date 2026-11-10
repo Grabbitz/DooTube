@@ -280,6 +280,10 @@ impl AppDelegate {
         };
         if action == sel!(showYouTube:) {
             check(mode == Mode::YouTube)
+        } else if action == sel!(toggleAutoNext:) {
+            check(queue::auto_next_enabled())
+        } else if action == sel!(toggleMusicMenuBar:) {
+            check(status_item::music_menu_bar_enabled())
         } else if action == sel!(toggleQueue:) {
             check(
                 self.ivars()

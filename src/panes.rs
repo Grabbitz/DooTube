@@ -28,6 +28,9 @@ impl AppDelegate {
 
     /// Shows a section, opening its home page the first time it is shown.
     pub(crate) fn switch_mode(&self, mode: Mode) {
+        if mode != self.ivars().mode.get() {
+            self.cancel_auto_next();
+        }
         if mode != self.ivars().mode.get() && self.ivars().fullscreen_mode.get().is_some() {
             self.exit_video_fullscreen(false);
         }
@@ -99,6 +102,7 @@ impl AppDelegate {
     /// The sidebar card shows what Music is playing while the YouTube section is shown; in the
     /// Music section YouTube Music's own player bar is on screen.
     pub(crate) fn update_now_playing(&self) {
+        self.update_music_status_item();
         let ivars = self.ivars();
         let Some(card) = ivars.now_playing.get() else {
             return;

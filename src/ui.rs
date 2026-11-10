@@ -410,6 +410,81 @@ impl Notice {
         self.root.setHidden(true);
     }
 }
+/// A compact, actionable countdown above the page, away from the player's controls.
+pub struct AutoNextNotice {
+    pub root: Retained<NSBox>,
+    label: Retained<NSTextField>,
+    pub play: Retained<NSButton>,
+    pub cancel: Retained<NSButton>,
+}
+
+impl AutoNextNotice {
+    pub fn new(mtm: MainThreadMarker) -> Self {
+        let root = NSBox::new(mtm);
+        root.setBoxType(NSBoxType::Custom);
+        root.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
+        root.setCornerRadius(10.);
+        root.setBorderWidth(1.);
+        root.setBorderColor(&NSColor::separatorColor());
+        root.setFillColor(&NSColor::windowBackgroundColor());
+        root.setContentViewMargins(NSSize::new(0., 0.));
+        root.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let label = NSTextField::wrappingLabelWithString(&ns(""), mtm);
+        label.setPreferredMaxLayoutWidth(350.);
+        label.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let play =
+            unsafe { NSButton::buttonWithTitle_target_action(&ns("Play Now"), None, None, mtm) };
+        let cancel =
+            unsafe { NSButton::buttonWithTitle_target_action(&ns("Cancel"), None, None, mtm) };
+        cancel.setKeyEquivalent(&ns("\u{1b}"));
+        cancel.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags::empty());
+        for button in [&play, &cancel] {
+            button.setTranslatesAutoresizingMaskIntoConstraints(false);
+        }
+        let content = NSView::new(mtm);
+        content.addSubview(&label);
+        content.addSubview(&play);
+        content.addSubview(&cancel);
+        root.setContentView(Some(&content));
+        activate(&[
+            label
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&content.leadingAnchor(), 14.),
+            label
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&content.topAnchor(), 10.),
+            label
+                .bottomAnchor()
+                .constraintEqualToAnchor_constant(&content.bottomAnchor(), -10.),
+            play.leadingAnchor()
+                .constraintEqualToAnchor_constant(&label.trailingAnchor(), 10.),
+            play.centerYAnchor()
+                .constraintEqualToAnchor(&content.centerYAnchor()),
+            cancel
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&play.trailingAnchor(), 4.),
+            cancel
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&content.trailingAnchor(), -10.),
+            cancel
+                .centerYAnchor()
+                .constraintEqualToAnchor(&content.centerYAnchor()),
+        ]);
+        root.setHidden(true);
+        Self {
+            root,
+            label,
+            play,
+            cancel,
+        }
+    }
+
+    pub fn show(&self, title: &str, seconds: u8) {
+        self.label
+            .setStringValue(&ns(&format!("Playing {title} in {seconds} s")));
+        self.root.setHidden(false);
+    }
+}
 
 /// Side length of the Now Playing artwork, in points.
 const ARTWORK_SIZE: f64 = 36.;

@@ -45,6 +45,13 @@ impl AppDelegate {
             notice.close.setTarget(Some(self));
             notice.close.setAction(Some(sel!(hideNotice:)));
         }
+        let auto_next = ui::AutoNextNotice::new(mtm);
+        unsafe {
+            auto_next.play.setTarget(Some(self));
+            auto_next.play.setAction(Some(sel!(playAutoNext:)));
+            auto_next.cancel.setTarget(Some(self));
+            auto_next.cancel.setAction(Some(sel!(cancelAutoNext:)));
+        }
         let backdrop = NSBox::new(mtm);
         backdrop.setBoxType(NSBoxType::Custom);
         backdrop.setTitlePosition(NSTitlePosition::NoTitle);
@@ -195,6 +202,22 @@ impl AppDelegate {
         drawer.addSubview(&close);
         drawer.addSubview(&sidebar);
         content.addSubview(&drawer);
+        // Keep the countdown actionable even when the drawer and its scrim are already open.
+        content.addSubview(&auto_next.root);
+        ui::activate(&[
+            auto_next
+                .root
+                .centerXAnchor()
+                .constraintEqualToAnchor(&container.centerXAnchor()),
+            auto_next
+                .root
+                .topAnchor()
+                .constraintEqualToAnchor_constant(&container.topAnchor(), 12.),
+            auto_next
+                .root
+                .widthAnchor()
+                .constraintLessThanOrEqualToAnchor_constant(&container.widthAnchor(), -40.),
+        ]);
         ui::activate(&[
             scrim
                 .topAnchor()
@@ -275,6 +298,7 @@ impl AppDelegate {
         ivars.panes.set(panes).ok();
         ivars.placeholder.set(placeholder).ok();
         ivars.notice.set(notice).ok();
+        ivars.auto_next_notice.set(auto_next).ok();
         self.update_account_ui();
         window.makeKeyAndOrderFront(None);
 
@@ -295,6 +319,9 @@ impl AppDelegate {
     }
 
     pub(crate) fn set_queue_visible(&self, visible: bool) {
+        if visible {
+            self.cancel_auto_next();
+        }
         let ivars = self.ivars();
         let was_visible = ivars
             .queue_panel
@@ -571,6 +598,11 @@ impl AppDelegate {
                     mine("Show Up Next", sel!(toggleQueue:), "s"),
                     control_command,
                 )),
+                Some(mine(
+                    "Show Music in Menu Bar",
+                    sel!(toggleMusicMenuBar:),
+                    "",
+                )),
                 None,
                 Some(mine("Back", sel!(goBack:), "[")),
                 Some(mine("Forward", sel!(goForward:), "]")),
@@ -597,6 +629,12 @@ impl AppDelegate {
                 None,
                 Some(mine("Next", sel!(musicNext:), "\u{F703}")),
                 Some(mine("Previous", sel!(musicPrevious:), "\u{F702}")),
+                None,
+                Some(mine(
+                    "Play Up Next Automatically",
+                    sel!(toggleAutoNext:),
+                    "",
+                )),
                 None,
                 Some(with_mods(
                     mine("Speed Up", sel!(speedUp:), "."),

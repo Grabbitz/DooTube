@@ -10,6 +10,7 @@ mod page_state;
 mod panes;
 mod queue;
 mod sidebar;
+mod status_item;
 mod suggestions;
 mod ui;
 mod web;
@@ -164,6 +165,11 @@ struct AppIvars {
     sidebar: OnceCell<Retained<NSTableView>>,
     placeholder: OnceCell<ui::Placeholder>,
     notice: OnceCell<ui::Notice>,
+    auto_next_notice: OnceCell<ui::AutoNextNotice>,
+    auto_next_target: RefCell<Option<(String, String)>>,
+    auto_next_fallback: RefCell<Option<(Url, String)>>,
+    auto_next_generation: Cell<u64>,
+    auto_next_seconds: Cell<u8>,
     /// `None` until the cookie store has been read once.
     signed_in: Cell<Option<bool>>,
     account_identity: RefCell<Option<web::AccountIdentity>>,
@@ -174,6 +180,7 @@ struct AppIvars {
     /// Downloaded artwork for `track`, with the URL it came from.
     artwork: RefCell<Option<(String, Retained<NSImage>)>>,
     now_playing: OnceCell<ui::NowPlayingCard>,
+    music_status_item: RefCell<Option<Retained<objc2_app_kit::NSStatusItem>>>,
     /// Up Next thumbnails by URL, kept for the session; `None` while loading or after a failed
     /// download, so each is fetched at most once.
     thumbnails: RefCell<HashMap<String, Option<Retained<NSImage>>>>,
@@ -375,6 +382,7 @@ define_class!(
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
             self.build_window();
+            self.update_music_status_item();
         }
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
@@ -537,6 +545,11 @@ define_class!(
                 {
                     self.on_video_progress(&url, seconds, duration);
                 }
+                Some(PageMessage::VideoEnded { url })
+                    if self.mode_of(&web) == Some(Mode::YouTube) && is_youtube_main_frame(message) =>
+                {
+                    self.on_video_ended(&url);
+                }
                 Some(PageMessage::NowPlaying(track))
                     if self.mode_of(&web) == Some(Mode::Music) && is_music_main_frame(message) =>
                 {
@@ -546,6 +559,7 @@ define_class!(
                 | Some(PageMessage::Fullscreen { .. })
                 | Some(PageMessage::NowPlaying(_))
                 | Some(PageMessage::Progress { .. })
+                | Some(PageMessage::VideoEnded { .. })
                 | None => {}
             }
         }
@@ -798,6 +812,14 @@ define_class!(
         fn action_resume_music(&self, _sender: Option<&AnyObject>) {
             self.switch_mode(Mode::Music);
         }
+        #[unsafe(method(toggleMusicMenuBar:))]
+        fn action_toggle_music_menu_bar(&self, _sender: Option<&AnyObject>) {
+            self.toggle_music_menu_bar();
+        }
+        #[unsafe(method(showMusicFromMenuBar:))]
+        fn action_show_music_from_menu_bar(&self, _sender: Option<&AnyObject>) {
+            self.show_music_from_menu_bar();
+        }
         #[unsafe(method(toggleQueue:))]
         fn action_toggle_queue(&self, _sender: Option<&AnyObject>) {
             let visible = self.ivars().queue_panel.get().is_some_and(|panel| !panel.isHidden());
@@ -811,6 +833,26 @@ define_class!(
                     None, NSPoint::new(0., 0.), Some(&bar.account),
                 );
             }
+        }
+        #[unsafe(method(toggleAutoNext:))]
+        fn action_toggle_auto_next(&self, _sender: Option<&AnyObject>) {
+            self.toggle_auto_next();
+        }
+        #[unsafe(method(playAutoNext:))]
+        fn action_play_auto_next(&self, _sender: Option<&AnyObject>) {
+            self.play_auto_next();
+        }
+        #[unsafe(method(cancelAutoNext:))]
+        fn action_cancel_auto_next(&self, _sender: Option<&AnyObject>) {
+            self.cancel_auto_next();
+        }
+        #[unsafe(method(tickAutoNext:))]
+        fn action_tick_auto_next(&self, _sender: Option<&AnyObject>) {
+            self.tick_auto_next();
+        }
+        #[unsafe(method(checkAutoNextFallback:))]
+        fn action_check_auto_next_fallback(&self, _sender: Option<&AnyObject>) {
+            self.check_auto_next_fallback();
         }
         #[unsafe(method(musicPlayPause:))]
         fn action_music_play_pause(&self, _sender: Option<&AnyObject>) {
@@ -866,6 +908,7 @@ define_class!(
         }
         #[unsafe(method(goBack:))]
         fn action_back(&self, _sender: Option<&AnyObject>) {
+            self.cancel_auto_next();
             self.set_queue_visible(false);
             if let Some(pane) = self.active() {
                 unsafe { pane.web.goBack() };
@@ -874,6 +917,7 @@ define_class!(
         }
         #[unsafe(method(goForward:))]
         fn action_forward(&self, _sender: Option<&AnyObject>) {
+            self.cancel_auto_next();
             self.set_queue_visible(false);
             if let Some(pane) = self.active() {
                 unsafe { pane.web.goForward() };
@@ -953,12 +997,18 @@ impl AppDelegate {
             sidebar: OnceCell::new(),
             placeholder: OnceCell::new(),
             notice: OnceCell::new(),
+            auto_next_notice: OnceCell::new(),
+            auto_next_target: RefCell::new(None),
+            auto_next_fallback: RefCell::new(None),
+            auto_next_generation: Cell::new(0),
+            auto_next_seconds: Cell::new(0),
             signed_in: Cell::new(None),
             account_identity: RefCell::new(None),
             account_photo: RefCell::new(None),
             track: RefCell::new(web::Track::default()),
             artwork: RefCell::new(None),
             now_playing: OnceCell::new(),
+            music_status_item: RefCell::new(None),
             thumbnails: RefCell::new(HashMap::new()),
             account_lookup_pending: Cell::new(false),
             account_lookup_attempted: Cell::new(false),

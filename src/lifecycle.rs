@@ -59,6 +59,7 @@ impl AppDelegate {
             self.resume_stage(mode);
             return;
         }
+        self.cancel_auto_next();
         // A new request replaces any other one still on screen.
         self.exit_video_fullscreen(false);
         let Some(rect) = rect.filter(|_| ivars.mode.get() == mode) else {
@@ -439,6 +440,7 @@ impl AppDelegate {
     }
 
     pub(crate) fn on_window_close(&self) {
+        self.cancel_auto_next();
         self.exit_video_fullscreen(false);
         self.ivars().window_closed.set(true);
         self.pause_web();
@@ -454,6 +456,7 @@ impl AppDelegate {
     }
 
     pub(crate) fn on_window_minimize(&self) {
+        self.cancel_auto_next();
         self.exit_video_fullscreen(false);
         self.ivars().window_minimized.set(true);
         self.pause_web();
@@ -465,6 +468,7 @@ impl AppDelegate {
     }
 
     pub(crate) fn on_application_hide(&self) {
+        self.cancel_auto_next();
         self.ivars().app_hidden.set(true);
         self.pause_web();
     }

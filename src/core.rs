@@ -268,6 +268,10 @@ impl AppState {
             None => item.url == url.as_str(),
         })
     }
+    /// The entry immediately after the saved video, in the current queue order.
+    pub fn next_after(&self, url: &Url) -> Option<&QueueItem> {
+        self.up_next.get(self.position(url)? + 1)
+    }
     pub fn add(&mut self, url: &Url, title: Option<String>) -> bool {
         if self.position(url).is_some() {
             return false;
@@ -646,6 +650,29 @@ mod tests {
             None
         );
         assert_eq!(thumbnail("https://www.youtube.com/feed/history"), None);
+    }
+
+    #[test]
+    fn next_after_uses_same_video_and_queue_order() {
+        let mut state = AppState::default();
+        for id in ["a", "b", "c"] {
+            state.add(
+                &Url::parse(&format!("https://youtu.be/{id}")).unwrap(),
+                None,
+            );
+        }
+        let watch = |id| Url::parse(&format!("https://www.youtube.com/watch?v={id}")).unwrap();
+        assert_eq!(
+            state.next_after(&watch("a")).unwrap().video_id().as_deref(),
+            Some("b")
+        );
+        assert!(state.next_after(&watch("c")).is_none());
+        assert!(state.next_after(&watch("missing")).is_none());
+        state.move_item(2, 1);
+        assert_eq!(
+            state.next_after(&watch("a")).unwrap().video_id().as_deref(),
+            Some("c")
+        );
     }
 
     #[test]

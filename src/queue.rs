@@ -1,8 +1,209 @@
 //! Queue.
 
 use super::*;
+use objc2_foundation::NSUserDefaults;
+
+pub(crate) fn auto_next_enabled() -> bool {
+    NSUserDefaults::standardUserDefaults().boolForKey(ns_string!("PlayUpNextAutomatically"))
+}
 
 impl AppDelegate {
+    pub(crate) fn toggle_auto_next(&self) {
+        let enabled = !auto_next_enabled();
+        NSUserDefaults::standardUserDefaults()
+            .setBool_forKey(enabled, ns_string!("PlayUpNextAutomatically"));
+        if !enabled {
+            self.cancel_auto_next();
+        }
+    }
+
+    pub(crate) fn on_video_ended(&self, text: &str) {
+        let ivars = self.ivars();
+        if !auto_next_enabled()
+            || ivars.mode.get() != Mode::YouTube
+            || ivars.app_hidden.get()
+            || ivars.window_minimized.get()
+            || ivars.window_closed.get()
+            || ivars.fullscreen_mode.get().is_some()
+            || ivars.auto_next_target.borrow().is_some()
+        {
+            return;
+        }
+        let Ok(url) = Url::parse(text) else { return };
+        if url.path() != "/watch"
+            || video_id(&url).is_none()
+            || self.current_url().and_then(|current| video_id(&current)) != video_id(&url)
+        {
+            return;
+        }
+        let Some((target, title)) = self
+            .with_state(|state| {
+                state
+                    .next_after(&url)
+                    .map(|item| (item.url.clone(), item.label()))
+            })
+            .flatten()
+        else {
+            return;
+        };
+        *ivars.auto_next_target.borrow_mut() = Some((target, title));
+        ivars.auto_next_seconds.set(5);
+        self.update_auto_next_notice();
+        self.schedule_auto_next_tick();
+    }
+
+    fn update_auto_next_notice(&self) {
+        if let (Some(notice), Some((_, title))) = (
+            self.ivars().auto_next_notice.get(),
+            self.ivars().auto_next_target.borrow().as_ref(),
+        ) {
+            notice.show(title, self.ivars().auto_next_seconds.get());
+        }
+    }
+
+    fn schedule_auto_next_tick(&self) {
+        unsafe {
+            let _: () = msg_send![self, performSelector: sel!(tickAutoNext:),
+                withObject: Option::<&AnyObject>::None, afterDelay: 1.0f64];
+        }
+    }
+
+    pub(crate) fn tick_auto_next(&self) {
+        if self.ivars().auto_next_target.borrow().is_none() {
+            return;
+        }
+        let seconds = self.ivars().auto_next_seconds.get().saturating_sub(1);
+        self.ivars().auto_next_seconds.set(seconds);
+        if seconds == 0 {
+            self.play_auto_next();
+        } else {
+            self.update_auto_next_notice();
+            self.schedule_auto_next_tick();
+        }
+    }
+
+    pub(crate) fn cancel_auto_next(&self) {
+        unsafe {
+            let _: () = msg_send![<NSObject as ClassType>::class(),
+                cancelPreviousPerformRequestsWithTarget: self,
+                selector: sel!(tickAutoNext:), object: Option::<&AnyObject>::None];
+            let _: () = msg_send![<NSObject as ClassType>::class(),
+                cancelPreviousPerformRequestsWithTarget: self,
+                selector: sel!(checkAutoNextFallback:), object: Option::<&AnyObject>::None];
+        }
+        self.ivars().auto_next_target.borrow_mut().take();
+        self.ivars().auto_next_fallback.borrow_mut().take();
+        let generation = &self.ivars().auto_next_generation;
+        generation.set(generation.get().wrapping_add(1));
+        if let Some(notice) = self.ivars().auto_next_notice.get() {
+            notice.root.setHidden(true);
+        }
+    }
+
+    pub(crate) fn check_auto_next_fallback(&self) {
+        unsafe {
+            let _: () = msg_send![<NSObject as ClassType>::class(),
+                cancelPreviousPerformRequestsWithTarget: self,
+                selector: sel!(checkAutoNextFallback:), object: Option::<&AnyObject>::None];
+        }
+        let Some((source, target)) = self.ivars().auto_next_fallback.borrow_mut().take() else {
+            return;
+        };
+        let current = self.current_url();
+        let target_id = Url::parse(&target).ok().and_then(|url| video_id(&url));
+        if current.as_ref() == Some(&source) && current.as_ref().and_then(video_id) != target_id {
+            self.load_url(&target);
+        }
+    }
+
+    pub(crate) fn play_auto_next(&self) {
+        let target = self
+            .ivars()
+            .auto_next_target
+            .borrow()
+            .as_ref()
+            .map(|(url, _)| url.clone());
+        self.cancel_auto_next();
+        let Some(index) = target
+            .and_then(|url| Url::parse(&url).ok())
+            .and_then(|url| self.with_state(|state| state.position(&url)).flatten())
+        else {
+            return;
+        };
+        let Some(url) = self
+            .with_state(|state| state.up_next.get(index).map(|item| item.resume_url()))
+            .flatten()
+        else {
+            return;
+        };
+        let Ok(parsed) = Url::parse(&url) else {
+            return;
+        };
+        let Some(id) = video_id(&parsed).filter(|_| {
+            !is_music_url(&parsed)
+                && (parsed.path() == "/watch" || parsed.host_str() == Some("youtu.be"))
+        }) else {
+            self.open_row(self.row_index(Row::Saved(index)));
+            return;
+        };
+        let Some(pane) = self.pane(Mode::YouTube) else {
+            return;
+        };
+        let url_json = serde_json::to_string(&url).expect("URL string");
+        self.set_queue_visible(false);
+        *pane.last_requested.borrow_mut() = Some(url.clone());
+        let id_json = serde_json::to_string(&id).expect("video ID string");
+        // Navigate in the current YouTube document so its gesture-approved media element can
+        // continue playing. A full WKWebView load would require another user gesture.
+        let script = format!(
+            r#"(() => {{
+  const app = document.querySelector("ytd-app");
+  if (!app) return false;
+  const u = new URL({url_json});
+  const id = {id_json};
+  u.searchParams.set("v", id);
+  const endpoint = {{ videoId: id }};
+  const time = u.searchParams.get("t") || u.searchParams.get("start");
+  if (time) {{
+    const parts = time.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+    if (parts) endpoint.startTimeSeconds = (+parts[1] || 0) * 3600 + (+parts[2] || 0) * 60 + (+parts[3] || 0);
+  }}
+  const list = u.searchParams.get("list");
+  if (list) endpoint.playlistId = list;
+  const index = u.searchParams.get("index");
+  if (index && /^\d+$/.test(index)) endpoint.index = +index;
+  app.dispatchEvent(new CustomEvent("yt-navigate", {{ bubbles: true, composed: true, detail: {{
+    endpoint: {{ commandMetadata: {{ webCommandMetadata: {{
+      url: "/watch?" + u.searchParams, webPageType: "WEB_PAGE_TYPE_WATCH", rootVe: 3832
+    }} }}, watchEndpoint: endpoint }}
+  }} }}));
+  return true;
+}})()"#
+        );
+        let Some(source) = self.current_url() else {
+            return;
+        };
+        *self.ivars().auto_next_fallback.borrow_mut() = Some((source, url));
+        unsafe {
+            let _: () = msg_send![self, performSelector: sel!(checkAutoNextFallback:),
+                withObject: Option::<&AnyObject>::None, afterDelay: 3.0f64];
+        }
+        let generation = self.ivars().auto_next_generation.get();
+        let this = self.retain();
+        let block = RcBlock::new(move |result: *mut AnyObject, _error: *mut NSError| {
+            let navigated = unsafe { result.as_ref() }
+                .and_then(|value| value.downcast_ref::<NSNumber>())
+                .is_some_and(|value| value.doubleValue() != 0.);
+            if !navigated && this.ivars().auto_next_generation.get() == generation {
+                this.check_auto_next_fallback();
+            }
+        });
+        unsafe {
+            pane.web
+                .evaluateJavaScript_completionHandler(&ns(&script), Some(&block));
+        }
+    }
+
     /// Applies a queue edit, persisting before committing it in memory.
     pub(crate) fn change_queue(&self, update: impl FnOnce(&mut AppState) -> bool) -> bool {
         let mut stored = self.ivars().queue.borrow_mut();
@@ -22,6 +223,7 @@ impl AppDelegate {
         }
         *state = candidate;
         drop(stored);
+        self.cancel_auto_next();
         self.reload_sidebar();
         true
     }

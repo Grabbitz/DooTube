@@ -242,6 +242,9 @@ pub enum PageMessage {
         seconds: f64,
         duration: f64,
     },
+    /// The main watch-page video ended, excluding ads and live streams.
+    #[serde(rename = "video_ended")]
+    VideoEnded { url: String },
     /// YouTube Music's player bar changed track or play state.
     #[serde(rename = "nowplaying")]
     NowPlaying(Track),
@@ -495,6 +498,16 @@ pub fn page_script() -> String {
     }};
     document.addEventListener("timeupdate", () => progress(false), true);
     for (const name of ["pause", "ended"]) document.addEventListener(name, () => progress(true), true);
+    document.addEventListener("ended", (event) => {{
+      if (location.pathname !== "/watch") return;
+      const player = document.querySelector("#movie_player");
+      const video = player && player.querySelector("video");
+      if (!video || event.target !== video || player.classList.contains("ad-showing")) return;
+      if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+      const details = player.getPlayerResponse?.()?.videoDetails;
+      if (!details || details.isLiveContent !== false) return;
+      post({{ type: "video_ended", url: location.href }});
+    }}, true);
     document.addEventListener("yt-navigate-start", () => progress(true), true);
     window.addEventListener("pagehide", () => progress(true));
   }}
