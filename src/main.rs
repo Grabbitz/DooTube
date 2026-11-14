@@ -33,7 +33,7 @@ use objc2_app_kit::{
     NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationPresentationOptions,
     NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSButton, NSColor, NSControl,
     NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate, NSDragOperation,
-    NSDraggingInfo, NSEventModifierFlags, NSEventType, NSFont, NSImage, NSImageScaling,
+    NSDraggingInfo, NSEvent, NSEventModifierFlags, NSEventType, NSFont, NSImage, NSImageScaling,
     NSImageView, NSMenu, NSMenuItem, NSPasteboardItem, NSPasteboardTypeURL, NSPasteboardWriting,
     NSResponder, NSScrollView, NSSearchFieldDelegate, NSStackView, NSTableColumn,
     NSTableColumnResizingOptions, NSTableView, NSTableViewColumnAutoresizingStyle,
@@ -166,6 +166,8 @@ struct AppIvars {
     placeholder: OnceCell<ui::Placeholder>,
     notice: OnceCell<ui::Notice>,
     auto_next_notice: OnceCell<ui::AutoNextNotice>,
+    /// The video link under the last right-click in a page, with its title if the page had one.
+    context_link: RefCell<Option<(Url, Option<String>)>>,
     auto_next_target: RefCell<Option<(String, String)>>,
     auto_next_fallback: RefCell<Option<(Url, String)>>,
     auto_next_generation: Cell<u64>,
@@ -220,6 +222,23 @@ define_class!(
                 view = unsafe { current.superview() };
             }
             unsafe { msg_send![super(self), noResponderFor: selector] }
+        }
+    }
+);
+
+define_class!(
+    /// Provider web view whose context menu also offers DooTube's Up Next commands.
+    #[unsafe(super(WKWebView, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct PageWebView;
+
+    impl PageWebView {
+        #[unsafe(method(willOpenMenu:withEvent:))]
+        fn will_open_menu(&self, menu: &NSMenu, event: &NSEvent) {
+            let _: () = unsafe { msg_send![super(self), willOpenMenu: menu, withEvent: event] };
+            if let Some(delegate) = NSApplication::sharedApplication(self.mtm()).delegate() {
+                let _: () = unsafe { msg_send![&*delegate, extendPageMenu: menu] };
+            }
         }
     }
 );
@@ -550,12 +569,18 @@ define_class!(
                 {
                     self.on_video_ended(&url);
                 }
+                Some(PageMessage::ContextLink { url, title })
+                    if is_youtube_main_frame(message) || is_music_main_frame(message) =>
+                {
+                    self.on_context_link(&url, title);
+                }
                 Some(PageMessage::NowPlaying(track))
                     if self.mode_of(&web) == Some(Mode::Music) && is_music_main_frame(message) =>
                 {
                     self.on_now_playing(track);
                 }
                 Some(PageMessage::AccountIdentity { .. })
+                | Some(PageMessage::ContextLink { .. })
                 | Some(PageMessage::Fullscreen { .. })
                 | Some(PageMessage::NowPlaying(_))
                 | Some(PageMessage::Progress { .. })
@@ -587,12 +612,6 @@ define_class!(
     }
 
     unsafe impl NSWindowDelegate for AppDelegate {
-        #[unsafe(method(windowDidResize:))]
-        fn window_did_resize(&self, _notification: &NSNotification) {
-            if let Some(bar) = self.ivars().bar.get() {
-                bar.update_width(bar.root.bounds().size.width);
-            }
-        }
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notification: &NSNotification) {
             self.on_window_close();
@@ -886,6 +905,18 @@ define_class!(
         fn action_save(&self, _sender: Option<&AnyObject>) {
             self.save_current_video();
         }
+        #[unsafe(method(extendPageMenu:))]
+        fn extend_page_menu_action(&self, menu: &NSMenu) {
+            self.extend_page_menu(menu);
+        }
+        #[unsafe(method(addLinkToUpNext:))]
+        fn action_add_link(&self, _sender: Option<&AnyObject>) {
+            self.add_context_link(false);
+        }
+        #[unsafe(method(playLinkNext:))]
+        fn action_play_link_next(&self, _sender: Option<&AnyObject>) {
+            self.add_context_link(true);
+        }
         #[unsafe(method(openSaved:))]
         fn action_open_saved(&self, sender: Option<&AnyObject>) {
             if let Some(index) = self.target_saved_index(sender) {
@@ -998,6 +1029,7 @@ impl AppDelegate {
             placeholder: OnceCell::new(),
             notice: OnceCell::new(),
             auto_next_notice: OnceCell::new(),
+            context_link: RefCell::new(None),
             auto_next_target: RefCell::new(None),
             auto_next_fallback: RefCell::new(None),
             auto_next_generation: Cell::new(0),

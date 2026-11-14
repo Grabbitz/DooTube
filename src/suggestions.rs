@@ -19,15 +19,8 @@ pub(crate) struct Suggestions {
 impl Suggestions {
     /// Lays the (hidden) dropdown over `content`, just under `search` and as wide as it.
     pub fn new(mtm: MainThreadMarker, content: &NSView, search: &NSView) -> Self {
-        let root = NSBox::new(mtm);
-        root.setBoxType(NSBoxType::Custom);
-        root.setTitlePosition(NSTitlePosition::NoTitle);
-        root.setBorderWidth(0.);
-        root.setCornerRadius(10.);
-        root.setFillColor(&cinema_bar::raised_color());
-        root.setContentViewMargins(NSSize::new(0., 0.));
+        let root = ui::surface(mtm, 14., &cinema_bar::raised_color());
         root.setHidden(true);
-        root.setTranslatesAutoresizingMaskIntoConstraints(false);
         let stack = NSStackView::new(mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
         stack.setSpacing(0.);
@@ -145,7 +138,7 @@ impl AppDelegate {
             row.setBoxType(NSBoxType::Custom);
             row.setTitlePosition(NSTitlePosition::NoTitle);
             row.setBorderWidth(0.);
-            row.setCornerRadius(6.);
+            row.setCornerRadius(8.);
             row.setContentViewMargins(NSSize::new(8., 0.));
             row.setContentView(Some(&button));
             row.setTranslatesAutoresizingMaskIntoConstraints(false);

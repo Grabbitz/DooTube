@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Right-click a video link on a YouTube or YouTube Music page for **Add to Up Next** and **Play Next** (right after the open video, or first when the open page isn't saved). A link that is already saved says so.
+- New look for the native chrome, using the app icon's teal and amber instead of YouTube red. The bar is a row of equal-height glass capsules with a thin teal edge and a soft glow: the app icon (Home) and Back/Forward on the left; the YouTube/Music switch beside search in the center; Save/Picture in Picture/Up Next and the account photo on the right. Icons and labels are larger, toolbar buttons light up under the pointer, and the search capsule brightens while it has focus. The window no longer opens with the search field focused; press ⌘L.
+- Up Next is a floating rounded panel rather than a full-height drawer, and its empty hint wraps instead of being cut off. Notices and search suggestions share the same rounded, hairline-edged surface.
+
 ## 0.4.3 — 2026-11-11
 
 - The toolbar underlines the selected YouTube or Music section and keeps more room for search in narrow windows. Up Next rows show longer titles and whether each item is YouTube or Music, and the empty drawer explains how to save a video.

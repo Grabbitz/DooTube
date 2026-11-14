@@ -245,6 +245,14 @@ pub enum PageMessage {
     /// The main watch-page video ended, excluding ads and live streams.
     #[serde(rename = "video_ended")]
     VideoEnded { url: String },
+    /// A context menu is opening over this link; `url` is empty when it isn't over a link.
+    #[serde(rename = "contextlink")]
+    ContextLink {
+        #[serde(default)]
+        url: String,
+        #[serde(default)]
+        title: String,
+    },
     /// YouTube Music's player bar changed track or play state.
     #[serde(rename = "nowplaying")]
     NowPlaying(Track),
@@ -480,6 +488,14 @@ pub fn page_script() -> String {
     if (!(media instanceof HTMLMediaElement) || !rate || media.currentSrc === rateSource) return;
     rateSource = media.currentSrc;
     media.playbackRate = rate;
+  }}, true);
+  // Tells DooTube which link a right-click is on, so its context menu can offer Up Next.
+  document.addEventListener("contextmenu", (event) => {{
+    const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    const card = link && link.closest("ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model, ytmusic-responsive-list-item-renderer, ytmusic-two-row-item-renderer");
+    const heading = card && card.querySelector("#video-title, h3, .title");
+    const title = (heading && heading.textContent || link && link.getAttribute("title") || "").trim().slice(0, 200);
+    post({{ type: "contextlink", url: link ? link.href : "", title }});
   }}, true);
   document.addEventListener("enterpictureinpicture", () => post({{ type: "pip", active: true }}), true);
   document.addEventListener("leavepictureinpicture", () => post({{ type: "pip", active: false }}), true);
@@ -796,6 +812,10 @@ mod tests {
         assert!(
             matches!(parse(r#"{"type":"audible","title":"Song"}"#), PageMessage::Audible { title } if title == "Song")
         );
+        assert!(matches!(
+            parse(r#"{"type":"contextlink","url":"https://www.youtube.com/watch?v=a","title":"T"}"#),
+            PageMessage::ContextLink { url, title } if url.ends_with("v=a") && title == "T"
+        ));
         assert!(pip_failure_notice("NotAllowedError").contains("Click the video"));
         assert!(matches!(
             parse(r#"{"type":"progress","url":"https://www.youtube.com/watch?v=a","seconds":61.5,"duration":600}"#),

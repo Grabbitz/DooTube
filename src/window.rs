@@ -123,7 +123,7 @@ impl AppDelegate {
             pane.web.setTranslatesAutoresizingMaskIntoConstraints(true);
             container.addSubview(&pane.web);
         }
-        let suggestions = suggestions::Suggestions::new(mtm, &content, &bar.search);
+        let suggestions = suggestions::Suggestions::new(mtm, &content, &bar.search_frame);
         let _ = self.ivars().bar.set(bar);
         let _ = self.ivars().container.set(container.clone());
         let _ = self.ivars().backdrop.set(backdrop);
@@ -162,7 +162,7 @@ impl AppDelegate {
         scrim.setBoxType(NSBoxType::Custom);
         scrim.setTitlePosition(NSTitlePosition::NoTitle);
         scrim.setBorderWidth(0.);
-        scrim.setFillColor(&NSColor::colorWithWhite_alpha(0., 0.65));
+        scrim.setFillColor(&NSColor::colorWithWhite_alpha(0., 0.5));
         scrim.setTranslatesAutoresizingMaskIntoConstraints(false);
         let dismiss = NSButton::new(mtm);
         dismiss.setTitle(ns_string!(""));
@@ -175,14 +175,12 @@ impl AppDelegate {
         scrim.addSubview(&dismiss);
         content.addSubview(&scrim);
 
-        let drawer = NSBox::new(mtm);
-        drawer.setBoxType(NSBoxType::Custom);
-        drawer.setTitlePosition(NSTitlePosition::NoTitle);
-        drawer.setBorderWidth(0.);
-        drawer.setFillColor(&cinema_bar::raised_color());
-        drawer.setTranslatesAutoresizingMaskIntoConstraints(false);
+        // A floating panel, inset from the window edge, rather than a full-height drawer.
+        let drawer = ui::surface(mtm, 18., &cinema_bar::raised_color());
         let title = NSTextField::labelWithString(ns_string!("Up Next"), mtm);
-        title.setFont(Some(&NSFont::boldSystemFontOfSize(28.)));
+        title.setFont(Some(&NSFont::systemFontOfSize_weight(20., unsafe {
+            objc2_app_kit::NSFontWeightSemibold
+        })));
         title.setTranslatesAutoresizingMaskIntoConstraints(false);
         let close = NSButton::new(mtm);
         close.setTitle(ns_string!(""));
@@ -245,31 +243,31 @@ impl AppDelegate {
                 .constraintEqualToAnchor(&scrim.bottomAnchor()),
             drawer
                 .topAnchor()
-                .constraintEqualToAnchor(&container.topAnchor()),
+                .constraintEqualToAnchor_constant(&container.topAnchor(), 4.),
             drawer
                 .trailingAnchor()
-                .constraintEqualToAnchor(&container.trailingAnchor()),
+                .constraintEqualToAnchor_constant(&container.trailingAnchor(), -10.),
             drawer
                 .bottomAnchor()
-                .constraintEqualToAnchor(&container.bottomAnchor()),
+                .constraintEqualToAnchor_constant(&container.bottomAnchor(), -10.),
             drawer.widthAnchor().constraintEqualToConstant(340.),
             title
                 .topAnchor()
-                .constraintEqualToAnchor_constant(&drawer.topAnchor(), 24.),
+                .constraintEqualToAnchor_constant(&drawer.topAnchor(), 20.),
             title
                 .leadingAnchor()
-                .constraintEqualToAnchor_constant(&drawer.leadingAnchor(), 24.),
+                .constraintEqualToAnchor_constant(&drawer.leadingAnchor(), 20.),
             close
                 .centerYAnchor()
                 .constraintEqualToAnchor(&title.centerYAnchor()),
             close
                 .trailingAnchor()
-                .constraintEqualToAnchor_constant(&drawer.trailingAnchor(), -16.),
+                .constraintEqualToAnchor_constant(&drawer.trailingAnchor(), -8.),
             close.widthAnchor().constraintEqualToConstant(44.),
             close.heightAnchor().constraintEqualToConstant(44.),
             sidebar
                 .topAnchor()
-                .constraintEqualToAnchor_constant(&title.bottomAnchor(), 24.),
+                .constraintEqualToAnchor_constant(&title.bottomAnchor(), 14.),
             sidebar
                 .leadingAnchor()
                 .constraintEqualToAnchor_constant(&drawer.leadingAnchor(), 16.),
@@ -301,6 +299,8 @@ impl AppDelegate {
         ivars.auto_next_notice.set(auto_next).ok();
         self.update_account_ui();
         window.makeKeyAndOrderFront(None);
+        // AppKit would start with the search field focused, and so outlined; ⌘L focuses it.
+        window.makeFirstResponder(None);
 
         let cookies = unsafe { WKWebsiteDataStore::defaultDataStore(mtm).httpCookieStore() };
         unsafe { cookies.addObserver(ProtocolObject::from_ref(self)) };
@@ -376,13 +376,14 @@ impl AppDelegate {
         }
         // Both panes share the configuration, so they share the default website data store and sign-in.
         Mode::ALL.map(|_| {
-            let web = unsafe {
-                WKWebView::initWithFrame_configuration(
-                    WKWebView::alloc(mtm),
-                    NSRect::new(NSPoint::new(0., 0.), NSSize::new(960., 700.)),
-                    &config,
-                )
+            let web: Retained<PageWebView> = unsafe {
+                msg_send![
+                    PageWebView::alloc(mtm),
+                    initWithFrame: NSRect::new(NSPoint::new(0., 0.), NSSize::new(960., 700.)),
+                    configuration: &*config
+                ]
             };
+            let web = web.into_super();
             unsafe {
                 web.setNavigationDelegate(Some(ProtocolObject::from_ref(self)));
                 web.setUIDelegate(Some(ProtocolObject::from_ref(self)));

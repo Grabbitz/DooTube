@@ -113,6 +113,20 @@ pub fn add_menu(
     menu
 }
 
+/// A rounded box with a hairline edge: the shape of every capsule and floating surface.
+pub fn surface(mtm: MainThreadMarker, radius: f64, fill: &NSColor) -> Retained<NSBox> {
+    let surface = NSBox::new(mtm);
+    surface.setBoxType(NSBoxType::Custom);
+    surface.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
+    surface.setCornerRadius(radius);
+    surface.setBorderWidth(1.);
+    surface.setBorderColor(&crate::cinema_bar::hairline_color());
+    surface.setFillColor(fill);
+    surface.setContentViewMargins(NSSize::new(0., 0.));
+    surface.setTranslatesAutoresizingMaskIntoConstraints(false);
+    surface
+}
+
 fn label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
     let field = NSTextField::labelWithString(&ns(text), mtm);
     field.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
@@ -127,7 +141,7 @@ const THUMBNAIL_SIZE: NSSize = NSSize::new(72., 44.);
 
 /// A downloaded video thumbnail, prepared once for [`saved_cell`].
 pub fn thumbnail_image(image: &NSImage) -> Retained<NSImage> {
-    rounded_image_sized(image, THUMBNAIL_SIZE, 4.)
+    rounded_image_sized(image, THUMBNAIL_SIZE, 8.)
 }
 
 /// Up Next row: the video's [`thumbnail_image`] (or `symbol_name` until it loads) and its title.
@@ -217,7 +231,8 @@ pub fn hint_cell(mtm: MainThreadMarker, text: &str) -> Retained<NSView> {
     );
     let field = label(mtm, text);
     field.setMaximumNumberOfLines(3);
-    field.setFont(Some(&NSFont::systemFontOfSize(14.)));
+    field.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
+    field.setFont(Some(&NSFont::systemFontOfSize(13.)));
     field.setTextColor(Some(&NSColor::secondaryLabelColor()));
     let icon = NSImageView::new(mtm);
     icon.setTranslatesAutoresizingMaskIntoConstraints(false);
@@ -356,15 +371,7 @@ pub struct Notice {
 
 impl Notice {
     pub fn new(mtm: MainThreadMarker) -> Self {
-        let root = NSBox::new(mtm);
-        root.setBoxType(NSBoxType::Custom);
-        root.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
-        root.setCornerRadius(10.);
-        root.setBorderWidth(1.);
-        root.setBorderColor(&NSColor::separatorColor());
-        root.setFillColor(&NSColor::windowBackgroundColor());
-        root.setContentViewMargins(NSSize::new(0., 0.));
-        root.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let root = surface(mtm, 14., &crate::cinema_bar::raised_color());
         let label = NSTextField::wrappingLabelWithString(&ns(""), mtm);
         label.setPreferredMaxLayoutWidth(440.);
         label.setTranslatesAutoresizingMaskIntoConstraints(false);
@@ -420,15 +427,7 @@ pub struct AutoNextNotice {
 
 impl AutoNextNotice {
     pub fn new(mtm: MainThreadMarker) -> Self {
-        let root = NSBox::new(mtm);
-        root.setBoxType(NSBoxType::Custom);
-        root.setTitlePosition(objc2_app_kit::NSTitlePosition::NoTitle);
-        root.setCornerRadius(10.);
-        root.setBorderWidth(1.);
-        root.setBorderColor(&NSColor::separatorColor());
-        root.setFillColor(&NSColor::windowBackgroundColor());
-        root.setContentViewMargins(NSSize::new(0., 0.));
-        root.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let root = surface(mtm, 14., &crate::cinema_bar::raised_color());
         let label = NSTextField::wrappingLabelWithString(&ns(""), mtm);
         label.setPreferredMaxLayoutWidth(350.);
         label.setTranslatesAutoresizingMaskIntoConstraints(false);
@@ -657,7 +656,7 @@ impl NowPlayingCard {
         if token != self.artwork_token.get() {
             self.artwork_token.set(token);
             let image = match artwork {
-                Some(artwork) => Some(rounded_image(artwork, ARTWORK_SIZE, 6.)),
+                Some(artwork) => Some(rounded_image(artwork, ARTWORK_SIZE, 8.)),
                 // A template symbol, so it takes the button's tint in light and dark mode.
                 None => symbol("music.note", "No artwork"),
             };

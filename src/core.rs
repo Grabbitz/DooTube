@@ -311,6 +311,20 @@ impl AppState {
         let to = if gap > from { gap - 1 } else { gap };
         (to != from).then_some(to)
     }
+    /// Saves `url` (if it isn't already) and puts it right after `current`'s entry, or first
+    /// when `current` isn't saved. `false` when nothing changed.
+    pub fn play_next(&mut self, url: &Url, title: Option<String>, current: Option<&Url>) -> bool {
+        let added = self.add(url, title);
+        let Some(from) = self.position(url) else {
+            return added;
+        };
+        let gap = current
+            .and_then(|current| self.position(current))
+            .map_or(0, |index| index + 1);
+        self.drop_destination(from, gap)
+            .is_some_and(|to| self.move_item(from, to))
+            || added
+    }
     pub fn move_item(&mut self, from: usize, to: usize) -> bool {
         if from >= self.up_next.len() || to >= self.up_next.len() {
             return false;
@@ -386,6 +400,31 @@ pub fn parse_suggestions(bytes: &[u8]) -> Option<(String, Vec<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn play_next_goes_after_the_open_video_or_first() {
+        let url = |id: &str| Url::parse(&format!("https://www.youtube.com/watch?v={id}")).unwrap();
+        let ids = |state: &AppState| {
+            state
+                .up_next
+                .iter()
+                .filter_map(QueueItem::video_id)
+                .collect::<Vec<_>>()
+                .join("")
+        };
+        let mut state = AppState::default();
+        for id in ["a", "b", "c"] {
+            state.add(&url(id), None);
+        }
+        assert!(state.play_next(&url("d"), None, Some(&url("a"))));
+        assert_eq!(ids(&state), "adbc");
+        assert!(state.play_next(&url("c"), None, Some(&url("a"))));
+        assert_eq!(ids(&state), "acdb");
+        assert!(state.play_next(&url("b"), None, None));
+        assert_eq!(ids(&state), "bacd");
+        assert!(!state.play_next(&url("a"), None, Some(&url("b"))));
+        assert!(!state.play_next(&url("a"), None, Some(&url("a"))));
+    }
     #[test]
     fn parses_suggest_replies() {
         let reply = r#"["ไม่ทัน",["ไม่ทันแล","ไม่ทันบอกลา"],[],{"google:suggestsubtypes":[[3]]}]"#;

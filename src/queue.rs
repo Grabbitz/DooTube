@@ -259,6 +259,72 @@ impl AppDelegate {
         self.change_queue(|state| state.add(&url, title));
     }
 
+    /// Remembers the video link a page's context menu is opening over, or forgets the last one.
+    pub(crate) fn on_context_link(&self, href: &str, title: String) {
+        let link = match parse_input(href) {
+            Ok(Navigation::Video(url)) => {
+                Some((url, Some(title).filter(|title| !title.is_empty())))
+            }
+            _ => None,
+        };
+        *self.ivars().context_link.borrow_mut() = link;
+    }
+
+    /// Puts the Up Next commands at the top of a page's context menu when it is over a video link.
+    pub(crate) fn extend_page_menu(&self, menu: &NSMenu) {
+        let Some(url) = self
+            .ivars()
+            .context_link
+            .borrow()
+            .as_ref()
+            .map(|(url, _)| url.clone())
+        else {
+            return;
+        };
+        let mtm = self.mtm();
+        let saved = self
+            .with_state(|state| state.position(&url).is_some())
+            .unwrap_or(false);
+        let add = ui::menu_item(
+            mtm,
+            if saved {
+                "Already in Up Next"
+            } else {
+                "Add to Up Next"
+            },
+            (!saved).then_some(sel!(addLinkToUpNext:)),
+            "",
+            Some(self),
+        );
+        let next = ui::menu_item(mtm, "Play Next", Some(sel!(playLinkNext:)), "", Some(self));
+        menu.insertItem_atIndex(&add, 0);
+        menu.insertItem_atIndex(&next, 1);
+        menu.insertItem_atIndex(&NSMenuItem::separatorItem(mtm), 2);
+    }
+
+    /// Saves the right-clicked video at the end of Up Next, or (`next`) right after the open
+    /// video, or first when the open page isn't a saved video.
+    pub(crate) fn add_context_link(&self, next: bool) {
+        let Some((url, title)) = self.ivars().context_link.borrow().clone() else {
+            return;
+        };
+        let current = self.current_video_url();
+        let changed = self.change_queue(|state| {
+            if next {
+                state.play_next(&url, title, current.as_ref())
+            } else {
+                state.add(&url, title)
+            }
+        });
+        if changed {
+            self.show_notice(if next {
+                "Playing next in Up Next"
+            } else {
+                "Added to Up Next"
+            });
+        }
+    }
+
     /// Display title of the open video, only once the page has caught up with it.
     pub(crate) fn current_title_for(&self, url: &Url) -> Option<String> {
         let pane = self.active()?;
