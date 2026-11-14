@@ -1,6 +1,6 @@
 # DooTube — resume checkpoint
 
-Updated 2026-11-11. Earlier checkpoints (including the Cinema UI of 0.3.0) are in Git history.
+Updated 2026-11-14. Earlier checkpoints (including the Cinema UI of 0.3.0) are in Git history.
 
 ## Confirmed direction
 
@@ -10,7 +10,9 @@ Updated 2026-11-11. Earlier checkpoints (including the Cinema UI of 0.3.0) are i
 
 ## Where things are
 
-- Published GitHub release: **0.4.3** (2026-11-11), [release page](https://github.com/Grabbitz/DooTube/releases/tag/v0.4.3). `main` matches it.
+- Published GitHub release: **0.5.0** (2026-11-14), [release page](https://github.com/Grabbitz/DooTube/releases/tag/v0.5.0). `main` matches it.
+- 0.5.0 restyled the native chrome (glass capsules with a teal edge and glow, from the app icon; design notes in `.impeccable.md`) and added Add to Up Next / Play Next to the page context menu. The creator confirmed the context menu appears in the debug app; the bar at rest and the Up Next panel were checked in screenshots. Hover highlights, the suggestions list, notices, and Up Next rows with thumbnails were not looked at.
+- Seek-bar preview images come from YouTube's `storyboards` in the player response; a video without them (seen on a day-old, hour-long upload) shows only the time pill, in a browser too.
 - 0.4.1 added: sign-out detection by the `SAPISID` cookie (YouTube keeps `LOGIN_INFO` after sign-out), playback speed up to 4× (⌥⌘. / ⌥⌘, / ⌥⌘0) carried over to the next video, hidden Shorts shelves, the Up Next count on the Dock icon, and no system beep for player keys the page handles (`QuietWindow` in `src/main.rs`).
 - Code is one module per app area under `src/` (window, panes, sidebar, queue, page state, account, navigation, notices, lifecycle, status_item). Page scripts and CSS: `src/web.rs`, `src/youtube_chrome.css`, `src/music_chrome.css`, `src/music_player.js`.
 - Current behavior and data boundaries: [docs/implementation.md](docs/implementation.md). Earlier evidence: [docs/verification.md](docs/verification.md).
